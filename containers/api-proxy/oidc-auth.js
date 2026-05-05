@@ -39,6 +39,9 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 /** Minimum delay between refresh attempts (prevents hot-looping on errors) */
 const MIN_REFRESH_DELAY_MS = 30 * 1000; // 30 seconds
 
+/** Retry delay (in seconds) when a proactive refresh fails */
+const REFRESH_RETRY_DELAY_S = 65;
+
 /** Timeout for OIDC / Azure AD HTTP requests */
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -380,14 +383,12 @@ class OidcTokenManager {
           error: String(err && err.message ? err.message : err),
         });
         // Back-off: retry in ~60 seconds
-        this._scheduleRefresh(65);
+        this._scheduleRefresh(REFRESH_RETRY_DELAY_S);
       });
     }, refreshInMs);
 
     // Allow the process to exit cleanly even if the timer is still pending
-    if (this._refreshTimer.unref) {
-      this._refreshTimer.unref();
-    }
+    this._refreshTimer.unref();
   }
 }
 

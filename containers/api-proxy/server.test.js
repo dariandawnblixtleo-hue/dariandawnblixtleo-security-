@@ -2637,7 +2637,7 @@ describe('createProviderServer', () => {
       getBasePath: () => '',
       getAuthHeaders: async (req) => {
         // Simulate an async OIDC token lookup
-        await new Promise((r) => setImmediate(r));
+        await Promise.resolve();
         const h = { 'Authorization': 'Bearer async-oidc-token' };
         headerCalls.push(h);
         return h;
