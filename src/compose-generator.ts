@@ -1342,6 +1342,19 @@ export function generateDockerCompose(
         // files into it would create an arbitrary-code-execution risk.  If you need a custom
         // transform, bake your hook.js into a custom container image and set the env var
         // directly in that image's Dockerfile / entrypoint — do NOT forward from the host.
+        // OIDC / workload-identity federation auth (for Azure OpenAI with Entra ID).
+        // When AWF_AUTH_TYPE=github-oidc is set on the host, forward all the env vars that
+        // the api-proxy needs to mint and exchange tokens.  The OIDC endpoint vars
+        // (ACTIONS_ID_TOKEN_REQUEST_*) are provided automatically by the GitHub Actions runner.
+        ...(process.env.AWF_AUTH_TYPE && { AWF_AUTH_TYPE: process.env.AWF_AUTH_TYPE }),
+        ...(process.env.AWF_AUTH_AUDIENCE && { AWF_AUTH_AUDIENCE: process.env.AWF_AUTH_AUDIENCE }),
+        ...(process.env.AWF_AZURE_TENANT_ID && { AWF_AZURE_TENANT_ID: process.env.AWF_AZURE_TENANT_ID }),
+        ...(process.env.AWF_AZURE_CLIENT_ID && { AWF_AZURE_CLIENT_ID: process.env.AWF_AZURE_CLIENT_ID }),
+        ...(process.env.AWF_AZURE_SCOPE && { AWF_AZURE_SCOPE: process.env.AWF_AZURE_SCOPE }),
+        // Forward Actions OIDC endpoint vars so the api-proxy can mint tokens inside the container.
+        // These are safe to forward: they are ephemeral runner-scoped credentials, not long-lived secrets.
+        ...(process.env.ACTIONS_ID_TOKEN_REQUEST_URL && { ACTIONS_ID_TOKEN_REQUEST_URL: process.env.ACTIONS_ID_TOKEN_REQUEST_URL }),
+        ...(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN && { ACTIONS_ID_TOKEN_REQUEST_TOKEN: process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }),
       },
       healthcheck: {
         test: ['CMD', 'curl', '-f', `http://localhost:${API_PROXY_HEALTH_PORT}/health`],

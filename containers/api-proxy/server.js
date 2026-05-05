@@ -53,6 +53,9 @@ const {
   normalizeApiTarget,
 } = require('./proxy-utils');
 
+// ── OIDC auth token manager ───────────────────────────────────────────────────
+const { createOidcTokenManager } = require('./oidc-auth');
+
 // ── Rate limiter ─────────────────────────────────────────────────────────────
 const limiter = rateLimiter.create();
 
@@ -116,11 +119,17 @@ function makeModelBodyTransform(provider) {
 // (reflectEndpoints, healthResponse, buildModelsJson) work correctly in tests.
 const { createAllAdapters } = require('./providers');
 
+// Create the OIDC token manager from the current process environment.
+// When AWF_AUTH_TYPE is not 'github-oidc' or required vars are missing,
+// oidcTokenManager.isEnabled() returns false and it has no effect.
+const oidcTokenManager = createOidcTokenManager(process.env, { proxyAgent });
+
 const registeredAdapters = createAllAdapters(process.env, {
   openaiBodyTransform:    makeModelBodyTransform('openai'),
   anthropicBodyTransform: makeModelBodyTransform('anthropic'),
   copilotBodyTransform:   makeModelBodyTransform('copilot'),
   geminiBodyTransform:    makeModelBodyTransform('gemini'),
+  oidcAuth:               oidcTokenManager,
 });
 
 // ── Cached model lists (populated at startup by fetchStartupModels) ───────────
@@ -1105,11 +1114,15 @@ async function fetchStartupModels(adaptersOrOverrides = {}) {
  * The factory is completely agnostic of provider details — all provider-specific
  * behaviour (auth, URL transforms, body transforms) is delegated to the adapter.
  *
+ * `getAuthHeaders()` may return either a plain object or a Promise<object> — both
+ * are supported so that OIDC-backed adapters can fetch/refresh tokens asynchronously
+ * while static-key adapters continue to work without modification.
+ *
  * @param {import('./providers').ProviderAdapter} adapter
  * @returns {http.Server}
  */
 function createProviderServer(adapter) {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     // ── Management endpoints (designated port only) ──────────────────────────
     if (adapter.isManagementPort && handleManagementEndpoint(req, res)) return;
 
@@ -1155,11 +1168,29 @@ function createProviderServer(adapter) {
       req.url = adapter.transformRequestUrl(req.url);
     }
 
+    // ── Resolve auth headers (may be async for OIDC-backed adapters) ──────────
+    let authHeaders;
+    try {
+      authHeaders = await Promise.resolve(adapter.getAuthHeaders(req));
+    } catch (err) {
+      const errMsg = err && err.message ? err.message : String(err);
+      logRequest('error', 'auth_error', {
+        provider: adapter.name,
+        message: 'Failed to resolve auth headers',
+        error: errMsg,
+      });
+      if (!res.headersSent) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Authentication unavailable', message: 'Could not acquire auth token; please retry' }));
+      }
+      return;
+    }
+
     // ── Proxy ─────────────────────────────────────────────────────────────────
     proxyRequest(
       req, res,
       adapter.getTargetHost(req),
-      adapter.getAuthHeaders(req),
+      authHeaders,
       adapter.name,
       adapter.getBasePath(req),
       adapter.getBodyTransform()
@@ -1167,7 +1198,7 @@ function createProviderServer(adapter) {
   });
 
   // ── WebSocket upgrade ─────────────────────────────────────────────────────
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     if (!adapter.isEnabled()) {
       socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
       socket.destroy();
@@ -1178,10 +1209,26 @@ function createProviderServer(adapter) {
       req.url = adapter.transformRequestUrl(req.url);
     }
 
+    // ── Resolve auth headers (may be async for OIDC-backed adapters) ──────────
+    let authHeaders;
+    try {
+      authHeaders = await Promise.resolve(adapter.getAuthHeaders(req));
+    } catch (err) {
+      const errMsg = err && err.message ? err.message : String(err);
+      logRequest('error', 'auth_error', {
+        provider: adapter.name,
+        message: 'Failed to resolve auth headers for WebSocket upgrade',
+        error: errMsg,
+      });
+      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     proxyWebSocket(
       req, socket, head,
       adapter.getTargetHost(req),
-      adapter.getAuthHeaders(req),
+      authHeaders,
       adapter.name,
       adapter.getBasePath(req)
     );
@@ -1197,54 +1244,67 @@ if (require.main === module) {
     message: 'Starting AWF API proxy sidecar',
     squid_proxy: HTTPS_PROXY || 'not configured',
     providers_configured: registeredAdapters.filter(a => a.isEnabled()).map(a => a.name),
+    oidc_auth_enabled: oidcTokenManager.isEnabled(),
   });
 
-  // Determine which adapters to bind and count validation participants
-  const adaptersToStart = registeredAdapters.filter(a => a.alwaysBind || a.isEnabled());
-  const expectedListeners = adaptersToStart.filter(a => a.participatesInValidation).length;
-  let readyListeners = 0;
+  // Start the OIDC token manager (fetches initial token) before binding listeners
+  // so the first inbound request can be served immediately.
+  oidcTokenManager.start().then(() => {
+    // Determine which adapters to bind and count validation participants
+    const adaptersToStart = registeredAdapters.filter(a => a.alwaysBind || a.isEnabled());
+    const expectedListeners = adaptersToStart.filter(a => a.participatesInValidation).length;
+    let readyListeners = 0;
 
-  function onListenerReady() {
-    readyListeners++;
-    if (readyListeners === expectedListeners) {
-      logRequest('info', 'startup_complete', {
-        message: `All ${expectedListeners} validation-participating listeners ready, starting key validation`,
-      });
-      validateApiKeys(adaptersToStart).catch((err) => {
-        logRequest('error', 'key_validation_error', { message: 'Unexpected error during key validation', error: String(err) });
-        keyValidationComplete = true;
-      });
-      fetchStartupModels(adaptersToStart).then(() => {
-        writeModelsJson();
-      }).catch((err) => {
-        logRequest('error', 'model_fetch_error', { message: 'Unexpected error fetching startup models', error: String(err) });
-        modelFetchComplete = true;
-        writeModelsJson();
+    function onListenerReady() {
+      readyListeners++;
+      if (readyListeners === expectedListeners) {
+        logRequest('info', 'startup_complete', {
+          message: `All ${expectedListeners} validation-participating listeners ready, starting key validation`,
+        });
+        validateApiKeys(adaptersToStart).catch((err) => {
+          logRequest('error', 'key_validation_error', { message: 'Unexpected error during key validation', error: String(err) });
+          keyValidationComplete = true;
+        });
+        fetchStartupModels(adaptersToStart).then(() => {
+          writeModelsJson();
+        }).catch((err) => {
+          logRequest('error', 'model_fetch_error', { message: 'Unexpected error fetching startup models', error: String(err) });
+          modelFetchComplete = true;
+          writeModelsJson();
+        });
+      }
+    }
+
+    for (const adapter of adaptersToStart) {
+      const server = createProviderServer(adapter);
+      server.listen(adapter.port, '0.0.0.0', () => {
+        logRequest('info', 'server_start', {
+          message: `${adapter.name} proxy listening on port ${adapter.port}`,
+          target: adapter.isEnabled() ? adapter.getTargetHost() : '(not configured)',
+        });
+        if (adapter.participatesInValidation) {
+          onListenerReady();
+        }
       });
     }
-  }
-
-  for (const adapter of adaptersToStart) {
-    const server = createProviderServer(adapter);
-    server.listen(adapter.port, '0.0.0.0', () => {
-      logRequest('info', 'server_start', {
-        message: `${adapter.name} proxy listening on port ${adapter.port}`,
-        target: adapter.isEnabled() ? adapter.getTargetHost() : '(not configured)',
-      });
-      if (adapter.participatesInValidation) {
-        onListenerReady();
-      }
+  }).catch((err) => {
+    logRequest('error', 'startup_error', {
+      message: 'Fatal error during OIDC token manager startup',
+      error: String(err && err.message ? err.message : err),
     });
-  }
+    process.exit(1);
+  });
 
   process.on('SIGTERM', async () => {
     logRequest('info', 'shutdown', { message: 'Received SIGTERM, shutting down gracefully' });
+    oidcTokenManager.stop();
     await closeLogStream();
     process.exit(0);
   });
 
   process.on('SIGINT', async () => {
     logRequest('info', 'shutdown', { message: 'Received SIGINT, shutting down gracefully' });
+    oidcTokenManager.stop();
     await closeLogStream();
     process.exit(0);
   });

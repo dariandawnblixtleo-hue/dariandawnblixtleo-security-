@@ -2582,6 +2582,84 @@ describe('docker-manager generateDockerCompose', () => {
         });
       });
 
+      describe('OIDC / Azure AD env var forwarding to api-proxy', () => {
+        const oidcVars = [
+          'AWF_AUTH_TYPE',
+          'AWF_AUTH_AUDIENCE',
+          'AWF_AZURE_TENANT_ID',
+          'AWF_AZURE_CLIENT_ID',
+          'AWF_AZURE_SCOPE',
+          'ACTIONS_ID_TOKEN_REQUEST_URL',
+          'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+        ];
+
+        let savedEnv: Record<string, string | undefined>;
+
+        beforeEach(() => {
+          savedEnv = {};
+          for (const key of oidcVars) {
+            savedEnv[key] = process.env[key];
+            delete process.env[key];
+          }
+        });
+
+        afterEach(() => {
+          for (const key of oidcVars) {
+            if (savedEnv[key] !== undefined) {
+              process.env[key] = savedEnv[key];
+            } else {
+              delete process.env[key];
+            }
+          }
+        });
+
+        it('should forward AWF_AUTH_TYPE to api-proxy when set', () => {
+          process.env.AWF_AUTH_TYPE = 'github-oidc';
+          const config = { ...mockConfig, enableApiProxy: true };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const env = result.services['api-proxy'].environment as Record<string, string>;
+          expect(env.AWF_AUTH_TYPE).toBe('github-oidc');
+        });
+
+        it('should not set AWF_AUTH_TYPE when env var is not set', () => {
+          const config = { ...mockConfig, enableApiProxy: true };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const env = result.services['api-proxy'].environment as Record<string, string>;
+          expect(env.AWF_AUTH_TYPE).toBeUndefined();
+        });
+
+        it('should forward all OIDC env vars to api-proxy when set', () => {
+          process.env.AWF_AUTH_TYPE = 'github-oidc';
+          process.env.AWF_AUTH_AUDIENCE = 'api://AzureADTokenExchange';
+          process.env.AWF_AZURE_TENANT_ID = 'test-tenant-id';
+          process.env.AWF_AZURE_CLIENT_ID = 'test-client-id';
+          process.env.AWF_AZURE_SCOPE = 'https://cognitiveservices.azure.com/.default';
+          process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example.com/token?api-version=2.0';
+          process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN = 'bearer-token-value';
+
+          const config = { ...mockConfig, enableApiProxy: true };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const env = result.services['api-proxy'].environment as Record<string, string>;
+
+          expect(env.AWF_AUTH_TYPE).toBe('github-oidc');
+          expect(env.AWF_AUTH_AUDIENCE).toBe('api://AzureADTokenExchange');
+          expect(env.AWF_AZURE_TENANT_ID).toBe('test-tenant-id');
+          expect(env.AWF_AZURE_CLIENT_ID).toBe('test-client-id');
+          expect(env.AWF_AZURE_SCOPE).toBe('https://cognitiveservices.azure.com/.default');
+          expect(env.ACTIONS_ID_TOKEN_REQUEST_URL).toBe('https://oidc.example.com/token?api-version=2.0');
+          expect(env.ACTIONS_ID_TOKEN_REQUEST_TOKEN).toBe('bearer-token-value');
+        });
+
+        it('should not set any OIDC vars when none are set in host env', () => {
+          const config = { ...mockConfig, enableApiProxy: true };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const env = result.services['api-proxy'].environment as Record<string, string>;
+          for (const key of oidcVars) {
+            expect(env[key]).toBeUndefined();
+          }
+        });
+      });
+
       it('should set OPENAI_API_TARGET in api-proxy when openaiApiTarget is provided', () => {
         const configWithProxy = { ...mockConfig, enableApiProxy: true, openaiApiKey: 'sk-test-key', openaiApiTarget: 'custom.openai-router.internal' };
         const result = generateDockerCompose(configWithProxy, mockNetworkConfigWithProxy);

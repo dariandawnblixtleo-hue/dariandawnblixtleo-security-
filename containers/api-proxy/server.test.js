@@ -1282,6 +1282,106 @@ describe('OpenCode adapter delegation', () => {
   });
 });
 
+// ── OpenAI adapter — OIDC auth ────────────────────────────────────────────────
+
+describe('createOpenAIAdapter — OIDC auth', () => {
+  const { createOpenAIAdapter } = require('./providers/openai');
+
+  const fakeReq = { headers: {}, method: 'POST', url: '/v1/chat/completions' };
+
+  /** Build a minimal mock OidcTokenManager */
+  function makeMockOidcManager({ enabled, token, error } = {}) {
+    return {
+      isEnabled: () => enabled !== false,
+      getToken: async () => {
+        if (error) throw new Error(error);
+        return token || 'mock-azure-bearer-token';
+      },
+    };
+  }
+
+  it('isEnabled() returns true when OIDC manager is enabled', () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: true }) });
+    expect(adapter.isEnabled()).toBe(true);
+  });
+
+  it('isEnabled() returns true when both apiKey and OIDC are configured', () => {
+    const adapter = createOpenAIAdapter(
+      { OPENAI_API_KEY: 'sk-static' },
+      { oidcAuth: makeMockOidcManager({ enabled: true }) }
+    );
+    expect(adapter.isEnabled()).toBe(true);
+  });
+
+  it('isEnabled() falls back to static key when OIDC manager is not enabled', () => {
+    const adapter = createOpenAIAdapter(
+      { OPENAI_API_KEY: 'sk-static' },
+      { oidcAuth: makeMockOidcManager({ enabled: false }) }
+    );
+    expect(adapter.isEnabled()).toBe(true);
+  });
+
+  it('isEnabled() returns false when neither key nor OIDC is configured', () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: false }) });
+    expect(adapter.isEnabled()).toBe(false);
+  });
+
+  it('getAuthHeaders() returns OIDC Bearer token when OIDC is enabled', async () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ token: 'az-token-123' }) });
+    const headers = await adapter.getAuthHeaders(fakeReq);
+    expect(headers).toEqual({ 'Authorization': 'Bearer az-token-123' });
+  });
+
+  it('getAuthHeaders() falls back to static key when OIDC is not enabled', async () => {
+    const adapter = createOpenAIAdapter(
+      { OPENAI_API_KEY: 'sk-static-key' },
+      { oidcAuth: makeMockOidcManager({ enabled: false }) }
+    );
+    const headers = await adapter.getAuthHeaders(fakeReq);
+    expect(headers).toEqual({ 'Authorization': 'Bearer sk-static-key' });
+  });
+
+  it('getAuthHeaders() rejects when OIDC token fetch fails', async () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ error: 'token expired' }) });
+    await expect(adapter.getAuthHeaders(fakeReq)).rejects.toThrow('token expired');
+  });
+
+  it('getValidationProbe() returns skip when OIDC is enabled', () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: true }) });
+    const probe = adapter.getValidationProbe();
+    expect(probe).toHaveProperty('skip', true);
+    expect(probe.reason).toMatch(/OIDC/i);
+  });
+
+  it('getModelsFetchConfig() returns null when OIDC is enabled (deferred to runtime)', () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: true }) });
+    expect(adapter.getModelsFetchConfig()).toBeNull();
+  });
+
+  it('getReflectionInfo().configured is true when OIDC is enabled', () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: true }) });
+    expect(adapter.getReflectionInfo().configured).toBe(true);
+  });
+
+  it('_oidcEnabled is true when OIDC manager is enabled', () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: true }) });
+    expect(adapter._oidcEnabled).toBe(true);
+  });
+
+  it('_oidcEnabled is false when no OIDC manager is provided', () => {
+    const adapter = createOpenAIAdapter({ OPENAI_API_KEY: 'sk-test' });
+    expect(adapter._oidcEnabled).toBe(false);
+  });
+
+  it('behaves identically to existing static-key path when oidcAuth is not passed', async () => {
+    const adapter = createOpenAIAdapter({ OPENAI_API_KEY: 'sk-existing-key' });
+    expect(adapter.isEnabled()).toBe(true);
+    const headers = await adapter.getAuthHeaders(fakeReq);
+    expect(headers.Authorization).toBe('Bearer sk-existing-key');
+  });
+});
+
+
 describe('httpProbe', () => {
   let server;
   let serverPort;
@@ -2523,6 +2623,47 @@ describe('createProviderServer', () => {
     await fetch(port, '/v1/models').catch(() => {});
     expect(headerCalls).toHaveLength(1);
     expect(headerCalls[0].Authorization).toBe('Bearer injected-token');
+  });
+
+  // ── Async getAuthHeaders (OIDC adapters) ─────────────────────────────────
+
+  it('supports async getAuthHeaders() returning a Promise', async () => {
+    const headerCalls = [];
+    const adapter = {
+      name: 'test-async-auth', port: 0, isManagementPort: false, alwaysBind: false,
+      participatesInValidation: false,
+      isEnabled: () => true,
+      getTargetHost: () => 'api.example.com',
+      getBasePath: () => '',
+      getAuthHeaders: async (req) => {
+        // Simulate an async OIDC token lookup
+        await new Promise((r) => setImmediate(r));
+        const h = { 'Authorization': 'Bearer async-oidc-token' };
+        headerCalls.push(h);
+        return h;
+      },
+      getBodyTransform: () => null,
+    };
+    const port = await startAdapter(adapter);
+    await fetch(port, '/v1/models').catch(() => {});
+    expect(headerCalls).toHaveLength(1);
+    expect(headerCalls[0].Authorization).toBe('Bearer async-oidc-token');
+  });
+
+  it('returns 503 when async getAuthHeaders() rejects', async () => {
+    const adapter = {
+      name: 'test-auth-fail', port: 0, isManagementPort: false, alwaysBind: false,
+      participatesInValidation: false,
+      isEnabled: () => true,
+      getTargetHost: () => 'api.example.com',
+      getBasePath: () => '',
+      getAuthHeaders: async () => { throw new Error('OIDC token fetch failed'); },
+      getBodyTransform: () => null,
+    };
+    const port = await startAdapter(adapter);
+    const { status, body } = await fetch(port, '/v1/models');
+    expect(status).toBe(503);
+    expect(body.error).toBe('Authentication unavailable');
   });
 
   // ── getBodyTransform called once per request (not per-call) ──────────────

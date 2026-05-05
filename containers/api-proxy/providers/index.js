@@ -99,12 +99,13 @@ const { createOpenCodeAdapter } = require('./opencode');
  * opencode.js itself are needed.
  *
  * @param {Record<string, string|undefined>} env - Environment variables (typically process.env)
- * @param {{ openaiBodyTransform, anthropicBodyTransform, copilotBodyTransform, geminiBodyTransform }} deps
+ * @param {{ openaiBodyTransform, anthropicBodyTransform, copilotBodyTransform, geminiBodyTransform, oidcAuth?: import('../oidc-auth').OidcTokenManager|null }} deps
  *   Body-transform functions produced by server.js (to avoid circular dependencies).
+ *   `oidcAuth` is the optional OidcTokenManager for OIDC-based providers.
  * @returns {ProviderAdapter[]}
  */
 function createAllAdapters(env, deps = {}) {
-  const openai    = createOpenAIAdapter(env,    { bodyTransform: deps.openaiBodyTransform    || null });
+  const openai    = createOpenAIAdapter(env,    { bodyTransform: deps.openaiBodyTransform    || null, oidcAuth: deps.oidcAuth || null });
   const anthropic = createAnthropicAdapter(env, { bodyTransform: deps.anthropicBodyTransform || null });
   const copilot   = createCopilotAdapter(env,   { bodyTransform: deps.copilotBodyTransform   || null });
   const gemini    = createGeminiAdapter(env,    { bodyTransform: deps.geminiBodyTransform    || null });
