@@ -1420,6 +1420,15 @@ export function generateDockerCompose(
       environment.OPENAI_API_KEY = 'sk-placeholder-for-api-proxy';
       environment.CODEX_API_KEY = 'sk-placeholder-for-api-proxy';
       logger.debug('OPENAI_API_KEY and CODEX_API_KEY set to placeholder values for credential isolation');
+    } else if (process.env.AWF_AUTH_TYPE === 'github-oidc') {
+      // OIDC-only mode (no static OPENAI_API_KEY): the api-proxy sidecar will acquire a
+      // short-lived Azure AD token via GitHub OIDC federation. We still need to point the
+      // agent at the proxy so it routes OpenAI traffic through the sidecar instead of
+      // connecting directly to the upstream host.
+      environment.OPENAI_BASE_URL = `http://${networkConfig.proxyIp}:${API_PROXY_PORTS.OPENAI}`;
+      environment.OPENAI_API_KEY = 'sk-placeholder-for-oidc-proxy';
+      environment.CODEX_API_KEY = 'sk-placeholder-for-oidc-proxy';
+      logger.debug(`OpenAI API will be proxied through sidecar (OIDC auth) at http://${networkConfig.proxyIp}:${API_PROXY_PORTS.OPENAI}`);
     }
     if (config.anthropicApiKey) {
       environment.ANTHROPIC_BASE_URL = `http://${networkConfig.proxyIp}:${API_PROXY_PORTS.ANTHROPIC}`;

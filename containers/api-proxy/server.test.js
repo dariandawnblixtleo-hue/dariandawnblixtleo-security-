@@ -1353,9 +1353,21 @@ describe('createOpenAIAdapter — OIDC auth', () => {
     expect(probe.reason).toMatch(/OIDC/i);
   });
 
-  it('getModelsFetchConfig() returns null when OIDC is enabled (deferred to runtime)', () => {
-    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ enabled: true }) });
-    expect(adapter.getModelsFetchConfig()).toBeNull();
+  it('getModelsFetchConfig() returns async config with Bearer token when OIDC is enabled', async () => {
+    const adapter = createOpenAIAdapter(
+      { OPENAI_API_TARGET: 'myaccount.openai.azure.com', OPENAI_API_BASE_PATH: '/openai/deployments/gpt-4' },
+      { oidcAuth: makeMockOidcManager({ token: 'az-token-abc' }) }
+    );
+    const config = await adapter.getModelsFetchConfig();
+    expect(config).not.toBeNull();
+    expect(config.cacheKey).toBe('openai');
+    expect(config.url).toBe('https://myaccount.openai.azure.com/openai/deployments/gpt-4/models');
+    expect(config.opts.headers.Authorization).toBe('Bearer az-token-abc');
+  });
+
+  it('getModelsFetchConfig() propagates OIDC token errors', async () => {
+    const adapter = createOpenAIAdapter({}, { oidcAuth: makeMockOidcManager({ error: 'token expired' }) });
+    await expect(adapter.getModelsFetchConfig()).rejects.toThrow('token expired');
   });
 
   it('getReflectionInfo().configured is true when OIDC is enabled', () => {
@@ -1948,6 +1960,34 @@ describe('fetchStartupModels', () => {
     expect(cachedModels).toEqual({});
     const reflect = reflectEndpoints();
     expect(reflect.models_fetch_complete).toBe(true);
+  });
+
+  it('adapter-based: supports async getModelsFetchConfig (e.g. OIDC)', async () => {
+    mockHttpsRequestWithBody(200, '{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}');
+
+    // Adapter with async getModelsFetchConfig simulating OIDC token acquisition
+    const oidcAdapter = {
+      name: 'openai-oidc',
+      getModelsFetchConfig: async () => ({
+        url: 'https://myaccount.openai.azure.com/openai/deployments/gpt-4/models',
+        opts: { method: 'GET', headers: { 'Authorization': 'Bearer az-oidc-token' } },
+        cacheKey: 'openai',
+      }),
+    };
+
+    await fetchStartupModels([oidcAdapter]);
+    expect(cachedModels.openai).toEqual(['gpt-4o', 'gpt-4o-mini']);
+  });
+
+  it('adapter-based: handles null from async getModelsFetchConfig gracefully', async () => {
+    const spy = jest.spyOn(https, 'request');
+    const adapter = {
+      name: 'no-config',
+      getModelsFetchConfig: async () => null,
+    };
+    await fetchStartupModels([adapter]);
+    expect(spy).not.toHaveBeenCalled();
+    expect(cachedModels).toEqual({});
   });
 });
 

@@ -1108,12 +1108,14 @@ async function fetchStartupModels(adaptersOrOverrides = {}) {
     const fetches = [];
 
     for (const adapter of adapters) {
-      const config = adapter.getModelsFetchConfig?.();
-      if (!config) continue;
-
+      // getModelsFetchConfig() may return a plain config object or a Promise<config>
+      // (e.g. OIDC-backed adapters need to acquire a token asynchronously first).
       fetches.push(
-        fetchJson(config.url, config.opts, TIMEOUT_MS).then((json) => {
-          cachedModels[config.cacheKey] = extractModelIds(json);
+        Promise.resolve(adapter.getModelsFetchConfig?.()).then((config) => {
+          if (!config) return;
+          return fetchJson(config.url, config.opts, TIMEOUT_MS).then((json) => {
+            cachedModels[config.cacheKey] = extractModelIds(json);
+          });
         })
       );
     }

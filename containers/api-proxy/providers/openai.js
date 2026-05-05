@@ -109,13 +109,24 @@ function createOpenAIAdapter(env, deps = {}) {
      * Returns the model-list fetch config for /reflect model population, or null.
      * Uses the configured base path so prefixed OpenAI-compatible deployments
      * (e.g. Databricks, Azure) populate /reflect and models.json correctly.
-     * OIDC auth is async so model fetching is skipped at startup — the model list
-     * will be populated on the first authenticated request.
      *
-     * @returns {{ url: string, opts: object, cacheKey: string }|null}
+     * When OIDC is configured, this method is async — it acquires a fresh token so
+     * that fetchStartupModels() can populate cachedModels.openai. This ensures that
+     * AWF_MODEL_ALIASES entries targeting `openai/*` resolve correctly and that
+     * /reflect and models.json show the available Azure OpenAI models.
+     *
+     * @returns {Promise<{ url: string, opts: object, cacheKey: string }|null>|{ url: string, opts: object, cacheKey: string }|null}
      */
-    getModelsFetchConfig() {
-      if (oidcEnabled) return null; // token not yet available at startup
+    async getModelsFetchConfig() {
+      if (oidcEnabled) {
+        const token = await oidcAuth.getToken();
+        const modelsPath = basePath ? `${basePath}/models` : '/v1/models';
+        return {
+          url: `https://${rawTarget}${modelsPath}`,
+          opts: { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } },
+          cacheKey: 'openai',
+        };
+      }
       if (!apiKey) return null;
       const modelsPath = basePath ? `${basePath}/models` : '/v1/models';
       return {

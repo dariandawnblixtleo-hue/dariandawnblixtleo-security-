@@ -2658,6 +2658,37 @@ describe('docker-manager generateDockerCompose', () => {
             expect(env[key]).toBeUndefined();
           }
         });
+
+        it('should set OPENAI_BASE_URL and placeholder keys in agent when AWF_AUTH_TYPE=github-oidc (no static key)', () => {
+          process.env.AWF_AUTH_TYPE = 'github-oidc';
+          // No openaiApiKey in config — OIDC-only mode
+          const config = { ...mockConfig, enableApiProxy: true };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const agentEnv = result.services.agent.environment as Record<string, string>;
+          expect(agentEnv.OPENAI_BASE_URL).toBe('http://172.30.0.30:10000');
+          expect(agentEnv.OPENAI_API_KEY).toBe('sk-placeholder-for-oidc-proxy');
+          expect(agentEnv.CODEX_API_KEY).toBe('sk-placeholder-for-oidc-proxy');
+        });
+
+        it('should not set OPENAI_BASE_URL in agent when enableApiProxy is false even if AWF_AUTH_TYPE=github-oidc', () => {
+          process.env.AWF_AUTH_TYPE = 'github-oidc';
+          // api-proxy not enabled — OIDC env vars are irrelevant
+          const config = { ...mockConfig, enableApiProxy: false };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const agentEnv = result.services.agent.environment as Record<string, string>;
+          expect(agentEnv.OPENAI_BASE_URL).toBeUndefined();
+        });
+
+        it('should prefer static key placeholder over OIDC placeholder when both are configured', () => {
+          process.env.AWF_AUTH_TYPE = 'github-oidc';
+          // Static key takes precedence (existing behavior is preserved)
+          const config = { ...mockConfig, enableApiProxy: true, openaiApiKey: 'sk-static' };
+          const result = generateDockerCompose(config, mockNetworkConfigWithProxy);
+          const agentEnv = result.services.agent.environment as Record<string, string>;
+          expect(agentEnv.OPENAI_BASE_URL).toBe('http://172.30.0.30:10000');
+          expect(agentEnv.OPENAI_API_KEY).toBe('sk-placeholder-for-api-proxy');
+          expect(agentEnv.CODEX_API_KEY).toBe('sk-placeholder-for-api-proxy');
+        });
       });
 
       it('should set OPENAI_API_TARGET in api-proxy when openaiApiTarget is provided', () => {
