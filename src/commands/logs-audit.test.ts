@@ -469,8 +469,9 @@ describe('logs-audit command', () => {
       // Verify shouldLog function was passed as not logging for json
       const call = mockedHelpers.discoverAndSelectSource.mock.calls[0];
       const loggingOptions = call[1];
-      expect(loggingOptions.shouldLog('json')).toBe(false);
-      expect(loggingOptions.shouldLog('pretty')).toBe(true);
+      expect(loggingOptions).toBeDefined();
+      expect(loggingOptions!.shouldLog('json')).toBe(false);
+      expect(loggingOptions!.shouldLog('pretty')).toBe(true);
     });
   });
 });

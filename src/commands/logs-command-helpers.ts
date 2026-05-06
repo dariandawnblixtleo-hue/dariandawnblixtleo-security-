@@ -31,12 +31,12 @@ interface LoggingOptions {
  * Handles validation, error messages, and optional logging.
  *
  * @param sourceOption - User-specified source path or "running", or undefined for auto-discovery
- * @param loggingOptions - Options controlling when to emit log messages
+ * @param loggingOptions - Options controlling when to emit log messages; when omitted, info messages are always emitted
  * @returns Selected log source
  */
 export async function discoverAndSelectSource(
   sourceOption: string | undefined,
-  loggingOptions: LoggingOptions
+  loggingOptions?: LoggingOptions
 ): Promise<LogSource> {
   // Discover log sources
   const sources = await discoverLogSources();
@@ -68,7 +68,8 @@ export async function discoverAndSelectSource(
     source = selected;
 
     // Log which source we're using (conditionally based on format)
-    if (loggingOptions.shouldLog(loggingOptions.format)) {
+    const shouldEmitInfo = !loggingOptions || loggingOptions.shouldLog(loggingOptions.format);
+    if (shouldEmitInfo) {
       if (source.type === 'running') {
         logger.info(`Using live logs from running container: ${source.containerName}`);
       } else {

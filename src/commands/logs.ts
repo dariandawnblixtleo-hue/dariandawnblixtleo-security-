@@ -5,13 +5,11 @@
 import { OutputFormat } from '../types';
 import { logger } from '../logger';
 import {
-  discoverLogSources,
-  selectMostRecent,
-  validateSource,
   listLogSources,
   LogFormatter,
   streamLogs,
 } from '../logs';
+import { discoverAndSelectSource } from './logs-command-helpers';
 
 /**
  * Options for the logs command
@@ -42,43 +40,8 @@ export async function logsCommand(options: LogsCommandOptions): Promise<void> {
     return;
   }
 
-  // Discover log sources
-  const sources = await discoverLogSources();
-
-  // Determine which source to use
-  let source;
-  if (options.source) {
-    // User specified a source
-    try {
-      source = await validateSource(options.source);
-      logger.debug(`Using specified source: ${options.source}`);
-    } catch (error) {
-      logger.error(
-        `Invalid log source: ${error instanceof Error ? error.message : error}`
-      );
-      process.exit(1);
-    }
-  } else if (sources.length === 0) {
-    logger.error('No log sources found. Run awf with a command first to generate logs.');
-    process.exit(1);
-  } else {
-    // Select most recent source
-    source = selectMostRecent(sources);
-    if (!source) {
-      logger.error('No log sources found.');
-      process.exit(1);
-    }
-
-    // Log which source we're using
-    if (source.type === 'running') {
-      logger.info(`Using live logs from running container: ${source.containerName}`);
-    } else {
-      logger.info(`Using preserved logs from: ${source.path}`);
-      if (source.dateStr) {
-        logger.info(`Log timestamp: ${source.dateStr}`);
-      }
-    }
-  }
+  // Resolve the log source (auto-discovers if not specified)
+  const source = await discoverAndSelectSource(options.source);
 
   // Setup formatter
   const formatter = new LogFormatter({
