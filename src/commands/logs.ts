@@ -9,7 +9,7 @@ import {
   LogFormatter,
   streamLogs,
 } from '../logs';
-import { discoverAndSelectSource } from './logs-command-helpers';
+import { discoverAndSelectSource } from './log-source-resolver';
 
 /**
  * Options for the logs command
