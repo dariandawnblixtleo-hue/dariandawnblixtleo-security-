@@ -206,11 +206,12 @@ grep -n "require.*providers\|from.*providers" containers/api-proxy/server.js 2>/
 
 ## Phase 6: Check for Existing Issues
 
-Before creating new issues:
+Before creating new issues, check BOTH open AND closed issues:
 
-1. Search for open issues with `[Export Audit]` prefix using the GitHub toolset
-2. Search for open issues with the `code-quality` label mentioning the same symbol or file
+1. Search for issues with `[Export Audit]` prefix mentioning the same symbol or file using `state: all` (or equivalent `is:open` + `is:closed`)
+2. Search for issues with the `code-quality` label mentioning the same symbol or file using `state: all` (or equivalent `is:open` + `is:closed`)
 3. Skip any finding that already has an open tracking issue
+4. For matching closed issues, check the GitHub `state_reason`: **auto-skip only when `state_reason` is `not_planned`** (often shown as "won't fix" / "not planned"). If `state_reason` is `completed` and the finding still reproduces, reopen the prior issue or file a new one with fresh evidence and a link to the prior issue.
 
 ## Phase 7: Prioritize and File Issues
 
@@ -265,7 +266,7 @@ Unused export / Naming inconsistency / Circular dependency / Import path issue
 
 - **Verify before filing**: Confirm that the export is truly unused by checking all import sites, including test files and any barrel exports (`index.ts`)
 - **Be precise**: Include the exact symbol name, file path, and line number in the evidence
-- **No duplicates**: Always check existing open issues before creating new ones
+- **No duplicates**: Always check existing issues with `state: all`; only treat closed issues as terminal when `state_reason` is `not_planned`
 - **Batch related findings**: If multiple unused exports are in the same file, file a single issue listing all of them
 - **Cap at 5 issues**: File at most 5 issues per run to avoid noise
 
