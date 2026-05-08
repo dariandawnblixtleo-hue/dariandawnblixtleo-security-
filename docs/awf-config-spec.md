@@ -70,8 +70,11 @@ Tools generating AWF invocations (such as `gh-aw`) SHOULD use this mapping:
 - `network.upstreamProxy` → `--upstream-proxy`
 - `apiProxy.enabled` → `--enable-api-proxy`
 - `apiProxy.enableOpenCode` → `--enable-opencode`
+- `apiProxy.anthropicAutoCache` → `--anthropic-auto-cache`
+- `apiProxy.anthropicCacheTailTtl` → `--anthropic-cache-tail-ttl`
 - `apiProxy.maxEffectiveTokens` → config-only (maps to API proxy effective-token guard)
 - `apiProxy.modelMultipliers` → config-only (maps to API proxy effective-token multipliers)
+- `apiProxy.models` → config-only (maps to API proxy model alias rewriting)
 - `apiProxy.targets.<provider>.host` → `--<provider>-api-target`
 - `apiProxy.targets.openai.basePath` → `--openai-api-base-path`
 - `apiProxy.targets.anthropic.basePath` → `--anthropic-api-base-path`
