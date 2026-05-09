@@ -101,6 +101,19 @@ the corresponding CLI flag.
 - `apiProxy.maxEffectiveTokens` → *(config-only; no CLI equivalent)*
 - `apiProxy.modelMultipliers` → *(config-only; no CLI equivalent)*
 - `apiProxy.models` → *(config-only; model alias rewriting)*
+- `apiProxy.auth.type` → *(config-only; maps to `AWF_AUTH_TYPE`)*
+- `apiProxy.auth.provider` → *(config-only; maps to `AWF_AUTH_PROVIDER`)*
+- `apiProxy.auth.oidcAudience` → *(config-only; maps to `AWF_AUTH_OIDC_AUDIENCE`)*
+- `apiProxy.auth.azureTenantId` → *(config-only; maps to `AWF_AUTH_AZURE_TENANT_ID`)*
+- `apiProxy.auth.azureClientId` → *(config-only; maps to `AWF_AUTH_AZURE_CLIENT_ID`)*
+- `apiProxy.auth.azureScope` → *(config-only; maps to `AWF_AUTH_AZURE_SCOPE`)*
+- `apiProxy.auth.azureCloud` → *(config-only; maps to `AWF_AUTH_AZURE_CLOUD`)*
+- `apiProxy.auth.awsRoleArn` → *(config-only; maps to `AWF_AUTH_AWS_ROLE_ARN`)*
+- `apiProxy.auth.awsRegion` → *(config-only; maps to `AWF_AUTH_AWS_REGION`)*
+- `apiProxy.auth.awsRoleSessionName` → *(config-only; maps to `AWF_AUTH_AWS_ROLE_SESSION_NAME`)*
+- `apiProxy.auth.gcpWorkloadIdentityProvider` → *(config-only; maps to `AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER`)*
+- `apiProxy.auth.gcpServiceAccount` → *(config-only; maps to `AWF_AUTH_GCP_SERVICE_ACCOUNT`)*
+- `apiProxy.auth.gcpScope` → *(config-only; maps to `AWF_AUTH_GCP_SCOPE`)*
 - `apiProxy.targets.<provider>.host` → `--<provider>-api-target`
 - `apiProxy.targets.openai.basePath` → `--openai-api-base-path`
 - `apiProxy.targets.anthropic.basePath` → `--anthropic-api-base-path`
@@ -325,7 +338,97 @@ COPILOT_PROVIDER_API_KEY
 Placeholder compatibility values (§9.2 item 3) are not secrets and MUST
 NOT be subject to one-shot protection.
 
-### 9.5 DIFC Proxy Credential Isolation
+### 9.5 OIDC Authentication
+
+When `apiProxy.auth.type` is set to `github-oidc`, the API proxy sidecar
+exchanges a GitHub Actions OIDC token for a provider-specific access token.
+The `apiProxy.auth.provider` field (default: `azure`) selects the token
+exchange protocol. A conforming implementation MUST:
+
+1. Forward the common OIDC configuration to the sidecar via the following
+   environment variables:
+
+   | Config path | Environment variable | Required | Default |
+   |-------------|----------------------|----------|---------|
+   | `apiProxy.auth.type` | `AWF_AUTH_TYPE` | ✅ | — |
+   | `apiProxy.auth.provider` | `AWF_AUTH_PROVIDER` | No | `azure` |
+   | `apiProxy.auth.oidcAudience` | `AWF_AUTH_OIDC_AUDIENCE` | No | *(provider-specific)* |
+
+2. Forward the GitHub Actions OIDC runtime tokens
+   (`ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`) to
+   the sidecar when `AWF_AUTH_TYPE=github-oidc`. These are injected
+   automatically by the Actions runner when the workflow declares
+   `permissions: id-token: write`.
+
+3. NOT expose the exchanged provider token in the agent container
+   environment. The sidecar SHALL inject it into upstream request headers.
+
+#### 9.5.1 Azure Provider (`provider: azure`)
+
+Exchanges the GitHub OIDC JWT for an Azure AD / Microsoft Entra access
+token via workload identity federation. The sidecar injects the resulting
+token as a Bearer `Authorization` header on upstream requests.
+
+| Config path | Environment variable | Required | Default |
+|-------------|----------------------|----------|---------|
+| `apiProxy.auth.azureTenantId` | `AWF_AUTH_AZURE_TENANT_ID` | ✅ | — |
+| `apiProxy.auth.azureClientId` | `AWF_AUTH_AZURE_CLIENT_ID` | ✅ | — |
+| `apiProxy.auth.azureScope` | `AWF_AUTH_AZURE_SCOPE` | No | `https://cognitiveservices.azure.com/.default` |
+| `apiProxy.auth.azureCloud` | `AWF_AUTH_AZURE_CLOUD` | No | `public` |
+
+Default OIDC audience: `api://AzureADTokenExchange`
+
+> **Note:** `azureTenantId` and `azureClientId` are required for Azure AD
+> federated credential exchange but MAY be omitted when using managed
+> identity. See
+> [docs/api-proxy-sidecar.md](api-proxy-sidecar.md#oidc-authentication-for-azure-openai)
+> for protocol-level details.
+
+#### 9.5.2 AWS Provider (`provider: aws`)
+
+Exchanges the GitHub OIDC JWT for temporary AWS credentials via
+`sts.amazonaws.com` `AssumeRoleWithWebIdentity`. The sidecar uses these
+credentials to sign upstream requests to AWS Bedrock using SigV4.
+
+| Config path | Environment variable | Required | Default |
+|-------------|----------------------|----------|---------|
+| `apiProxy.auth.awsRoleArn` | `AWF_AUTH_AWS_ROLE_ARN` | ✅ | — |
+| `apiProxy.auth.awsRegion` | `AWF_AUTH_AWS_REGION` | ✅ | — |
+| `apiProxy.auth.awsRoleSessionName` | `AWF_AUTH_AWS_ROLE_SESSION_NAME` | No | `awf-oidc-session` |
+
+Default OIDC audience: `sts.amazonaws.com`
+
+> **Note:** AWS Bedrock uses IAM/SigV4 request signing rather than Bearer
+> tokens. This means the sidecar MUST sign the complete request (method,
+> path, headers, body hash) with the temporary credentials — it is not
+> sufficient to inject a single `Authorization` header.
+
+#### 9.5.3 GCP Provider (`provider: gcp`)
+
+Exchanges the GitHub OIDC JWT for a GCP access token via the Security
+Token Service (`sts.googleapis.com`), optionally followed by service
+account impersonation via `iamcredentials.googleapis.com`. The sidecar
+injects the resulting token as a Bearer `Authorization` header.
+
+| Config path | Environment variable | Required | Default |
+|-------------|----------------------|----------|---------|
+| `apiProxy.auth.gcpWorkloadIdentityProvider` | `AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER` | ✅ | — |
+| `apiProxy.auth.gcpServiceAccount` | `AWF_AUTH_GCP_SERVICE_ACCOUNT` | No | — |
+| `apiProxy.auth.gcpScope` | `AWF_AUTH_GCP_SCOPE` | No | `https://www.googleapis.com/auth/cloud-platform` |
+
+Default OIDC audience: the `gcpWorkloadIdentityProvider` value
+
+When `gcpServiceAccount` is provided, the sidecar performs a two-step
+exchange:
+
+1. Exchange GitHub OIDC JWT for a federated access token via GCP STS
+2. Impersonate the service account to obtain a short-lived OAuth2 token
+
+When `gcpServiceAccount` is omitted, only step 1 is performed and the
+federated token is used directly. This requires that the federated
+principal has direct access grants on the target resource.
+
+### 9.6 DIFC Proxy Credential Isolation
 
 When `security.difcProxy.host` is set, `GITHUB_TOKEN` and `GH_TOKEN` MUST
 be excluded from the agent environment. These tokens SHALL be held
@@ -490,5 +593,7 @@ https://raw.githubusercontent.com/github/gh-aw-firewall/main/schemas/token-usage
   variables
 - [docs/authentication-architecture.md](authentication-architecture.md) —
   Credential isolation architecture and diagrams
+- [docs/api-proxy-sidecar.md](api-proxy-sidecar.md) — API proxy sidecar
+  configuration including OIDC authentication for Azure OpenAI
 - [schemas/README.md](../schemas/README.md) — JSONL schema directory with
   validation examples and versioning policy
