@@ -60,6 +60,41 @@ describe('agent service', () => {
       expect(volumes.some((v: string) => v.includes('agent-logs'))).toBe(true);
     });
 
+    it('should apply dockerHostPathPrefix to bind-mount source paths', () => {
+      const configWithPrefix = {
+        ...mockConfig,
+        dockerHostPathPrefix: '/daemon-root',
+        volumeMounts: ['/workspace:/workspace:ro'],
+      };
+      const result = generateDockerCompose(configWithPrefix, mockNetworkConfig);
+      const volumes = result.services.agent.volumes as string[];
+
+      expect(volumes).toContain('/daemon-root/tmp:/tmp:rw');
+      expect(volumes).toContain('/daemon-root/usr:/host/usr:ro');
+      expect(volumes).toContain('/daemon-root/etc/passwd:/host/etc/passwd:ro');
+      expect(volumes).toContain('/daemon-root/workspace:/host/workspace:ro');
+      expect(volumes).toContain('/dev/null:/host/var/run/docker.sock:ro');
+      expect(volumes).toContain('/dev/null:/host/run/docker.sock:ro');
+      expect(volumes.some((v: string) => v.startsWith(`/daemon-root${mockConfig.workDir}/chroot-`) && v.endsWith(':/host/etc/hosts:ro'))).toBe(true);
+
+      // Kernel virtual filesystems should NOT be prefixed — they are daemon-local
+      expect(volumes).toContain('/dev:/host/dev:ro');
+      expect(volumes).toContain('/sys:/host/sys:ro');
+      expect(volumes).not.toContain('/daemon-root/dev:/host/dev:ro');
+      expect(volumes).not.toContain('/daemon-root/sys:/host/sys:ro');
+    });
+
+    it('should normalize trailing slash in dockerHostPathPrefix', () => {
+      const configWithPrefix = {
+        ...mockConfig,
+        dockerHostPathPrefix: '/daemon-root/',
+      };
+      const result = generateDockerCompose(configWithPrefix, mockNetworkConfig);
+      const volumes = result.services.agent.volumes as string[];
+
+      expect(volumes).toContain('/daemon-root/tmp:/tmp:rw');
+    });
+
     it('should use selective mounts when no custom mounts specified', () => {
       const result = generateDockerCompose(mockConfig, mockNetworkConfig);
       const agent = result.services.agent;
