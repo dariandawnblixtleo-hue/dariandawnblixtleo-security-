@@ -260,6 +260,46 @@ steps:
 
 When `DOCKER_HOST` points to a Unix socket, AWF now uses that socket path for DinD exposure instead of assuming `/var/run/docker.sock`. If your runner uses a different socket path, AWF will honor it automatically. If you need an explicit override, `--docker-host unix:///path/to/docker.sock` also becomes the DinD socket exposed to the agent when `--enable-dind` is set, and AWF sets the agent's `DOCKER_HOST` to that same Unix URI.
 
+### Split runner/daemon filesystem (--docker-host-path-prefix)
+
+On ARC runners using the DinD sidecar pattern, the runner pod and the Docker daemon container have **separate filesystems**. The runner sees paths like `/home/runner/work/repo`, but the Docker daemon cannot resolve those paths because they don't exist in its mount namespace.
+
+Use `--docker-host-path-prefix` to tell AWF how the runner's filesystem is visible to the Docker daemon:
+
+```bash
+awf --docker-host-path-prefix /host \
+    --allow-domains github.com \
+    -- agent-command
+```
+
+This prefixes all AWF-managed bind-mount source paths so the daemon can resolve them. For example, `/tmp` becomes `/host/tmp`, and `/home/runner/.cache` becomes `/host/home/runner/.cache`.
+
+**Kernel virtual filesystems are excluded from prefixing.** Paths under `/dev`, `/sys`, and `/proc` are provided by the Docker daemon's own kernel and must not be prefixed. AWF handles this automatically.
+
+**Config file equivalent:**
+
+```yaml
+container:
+  dockerHostPathPrefix: /host
+```
+
+**When to use this flag:**
+
+| Scenario | Flag needed? |
+|----------|-------------|
+| Standard GitHub-hosted runner | No |
+| Self-hosted runner (single daemon) | No |
+| ARC runner with DinD sidecar | Yes — set to the host mount prefix (e.g. `/host`) |
+| ARC runner with Docker socket mount | Only if the runner and daemon have different filesystem views |
+
+### Security: procfs and credential isolation
+
+AWF mounts a container-scoped procfs at `/host/proc` with `hidepid=2` to prevent the agent from reading other processes' environment variables. This is critical because:
+
+- PID 1 (the entrypoint) may briefly hold authentication tokens before `unset_sensitive_tokens()` clears them
+- Without `hidepid=2`, an agent could race to read `/proc/1/environ` and extract credentials
+- The `/dev/fd` → `/proc/self/fd` symlink provides an indirect path to procfs that `hidepid=2` also blocks
+
 ### Limitation
 
 The DinD TCP address (e.g., `tcp://localhost:2375`) typically refers to the runner host's localhost interface. From *inside* the agent container, `localhost` resolves to the container's own loopback interface, not the host's. To make docker commands inside the agent reach the DinD daemon you need one of:

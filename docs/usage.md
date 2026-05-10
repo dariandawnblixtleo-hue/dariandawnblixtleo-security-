@@ -115,6 +115,10 @@ Options:
                                 Examples: 1g, 4g, 512m
   --enable-dind                Enable Docker-in-Docker by exposing host Docker socket.
                                WARNING: allows firewall bypass via docker run (default: false)
+  --docker-host-path-prefix <prefix>  Prefix bind-mount source paths so the Docker daemon can
+                               resolve runner filesystem paths. Required for split
+                               runner/daemon filesystems (e.g. ARC DinD sidecars).
+                               Example: --docker-host-path-prefix /host
   --enable-dlp                 Enable DLP (Data Loss Prevention) scanning to block credential
                                 exfiltration in outbound request URLs. (default: false)
   --diagnostic-logs            Collect container logs, exit state, and sanitized config on non-zero

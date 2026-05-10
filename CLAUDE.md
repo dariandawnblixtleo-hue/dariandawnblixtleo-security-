@@ -143,6 +143,7 @@ The codebase follows a modular architecture with clear separation of concerns:
 - Based on `ubuntu:22.04`; can also use GitHub Actions parity image (`act` preset)
 - Selective bind mounts under `/host/`: system binaries `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/sys`, `/dev` (ro); workspace and `/tmp` (rw); whitelisted `$HOME` subdirs (rw); select `/etc` files — NOT a blanket host FS mount; `/etc/shadow`, unwhitelisted home dirs, and most of `/etc` are excluded
 - `entrypoint.sh` handles: UID/GID remapping → DNS config → SSL CA import → chroot to `/host` → capability drop → run user command as host user
+- **procfs mount**: A container-scoped procfs is mounted at `/host/proc` with `hidepid=2` to support runtimes that read `/proc/self/exe` (Java, .NET) while preventing the agent from reading other processes' `/proc/[pid]/environ` (credential isolation)
 - **iptables init container** (`awf-iptables-init`): separate container sharing agent's network namespace via `network_mode: service:agent`. Runs `setup-iptables.sh` to configure NAT rules before user command starts. Agent waits for `/tmp/awf-init/ready` signal file.
 - Key iptables rules (in `setup-iptables.sh`):
   - Allow localhost (for stdio MCP servers) and DNS
@@ -213,6 +214,28 @@ AWF sets the following proxy-related environment variables in the agent containe
 # Use Cloudflare DNS instead of Google DNS
 sudo awf --allow-domains github.com --dns-servers 1.1.1.1,1.0.0.1 -- curl https://api.github.com
 ```
+
+## ARC / DinD Split Filesystem Support
+
+AWF supports ARC (Actions Runner Controller) runners that use the DinD (Docker-in-Docker) sidecar pattern, where the runner and Docker daemon have separate filesystems.
+
+### Key flags
+
+- **`--docker-host`**: Override the Docker socket path (auto-detected from `DOCKER_HOST`). When combined with `--enable-dind`, this socket is also exposed inside the agent container.
+- **`--docker-host-path-prefix <prefix>`**: Prefix all bind-mount source paths so the Docker daemon can resolve runner filesystem paths. Example: `--docker-host-path-prefix /host` rewrites `/tmp` → `/host/tmp`.
+- **`--enable-dind`**: Expose the Docker socket inside the agent container.
+
+### Path translation
+
+`--docker-host-path-prefix` applies to all service volumes (agent, squid, api-proxy, cli-proxy, iptables-init). However, kernel virtual filesystems (`/dev`, `/sys`, `/proc`) are automatically excluded from prefixing because they are provided by the Docker daemon's own kernel, not the runner's staged filesystem.
+
+The `/dev/null` path used for credential-hiding overlays is also preserved as-is.
+
+### Implementation files
+
+- `src/services/agent-volumes.ts`: `normalizeDockerHostPathPrefix()`, `translateBindMountHostPath()` — prefix normalization and per-mount translation with kernel VFS passthrough
+- `src/option-parsers.ts`: `resolveDockerHostPathPrefix()` — resolves the effective prefix from CLI args
+- `containers/agent/entrypoint.sh`: procfs mount with `hidepid=2` for credential isolation
 
 ## Exit Code Handling
 

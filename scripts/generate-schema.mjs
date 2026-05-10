@@ -310,6 +310,11 @@ const schemaBody = {
           description:
             'Docker daemon socket or host to connect to (e.g. "unix:///var/run/docker.sock").',
         },
+        dockerHostPathPrefix: {
+          type: 'string',
+          description:
+            'Prefix bind-mount source paths so the Docker daemon can resolve runner filesystem paths. Required for ARC DinD sidecar runners where the runner and daemon have separate filesystems. Example: "/host". Kernel virtual filesystems (/dev, /sys, /proc) are automatically excluded from prefixing.',
+        },
       },
     },
     environment: {
