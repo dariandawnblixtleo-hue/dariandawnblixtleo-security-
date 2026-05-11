@@ -71,10 +71,7 @@ export {
 
 import { program } from './cli-options';
 import { createMainAction } from './commands/main-action';
-import { registerSubcommands, validateFormat, handlePredownloadAction } from './commands/subcommands';
-
-// Re-export the program instance and subcommand utilities
-export { program, validateFormat, handlePredownloadAction };
+import { registerSubcommands } from './commands/subcommands';
 
 program.action(createMainAction(program.getOptionValueSource.bind(program)));
 registerSubcommands(program);
