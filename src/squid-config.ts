@@ -306,7 +306,17 @@ ${urlAclSection}${urlAccessRules}`;
  * // Blocked: internal.example.com -> acl blocked_domains dstdomain .internal.example.com
  */
 export function generateSquidConfig(config: SquidConfig): string {
-  const { domains, blockedDomains, port, sslBump, caFiles, sslDbPath, urlPatterns, enableHostAccess, allowHostPorts, enableDlp, dnsServers, upstreamProxy } = config;
+  const { domains, blockedDomains, port, sslBump, caFiles, sslDbPath, urlPatterns, enableHostAccess, allowHostPorts, enableDlp, dnsServers, upstreamProxy, apiProxyIp, apiProxyPorts } = config;
+
+  // Validate apiProxyIp if provided — must be a valid IPv4 address to prevent config injection.
+  // Each octet must be 0-255; the simple \d{1,3} pattern would wrongly accept 999.999.999.999.
+  if (apiProxyIp !== undefined) {
+    const octet = '(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]\\d|\\d)';
+    const ipv4Re = new RegExp(`^(?:${octet}\\.){3}${octet}$`);
+    if (!ipv4Re.test(apiProxyIp)) {
+      throw new Error(`SECURITY: apiProxyIp must be a valid IPv4 address (0-255 octets), got: ${JSON.stringify(apiProxyIp)}`);
+    }
+  }
 
   // Parse, deduplicate, and group domains by protocol (shared logic)
   const { domainsByProto, patternsByProto } = parseDomainConfig(domains);
@@ -573,6 +583,24 @@ acl Safe_ports port 443         # HTTPS`;
 
   portAclsSection += `\nacl CONNECT method CONNECT`;
 
+  // Add api-proxy ports to Safe_ports so that CONNECT / requests to those ports
+  // are not rejected by `deny CONNECT !Safe_ports` / `deny !Safe_ports` before
+  // the per-IP allow rule (below) has a chance to fire.
+  if (apiProxyPorts && apiProxyPorts.length > 0) {
+    for (const proxyPort of apiProxyPorts) {
+      if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
+        throw new Error(`Invalid api-proxy port: ${proxyPort}. Must be an integer between 1 and 65535`);
+      }
+      if (DANGEROUS_PORTS.includes(proxyPort)) {
+        throw new Error(
+          `Api-proxy port ${proxyPort} is blocked for security reasons. ` +
+          `Dangerous ports (SSH, databases, etc.) cannot be added to Safe_ports.`
+        );
+      }
+      portAclsSection += `\nacl Safe_ports port ${proxyPort}     # AWF api-proxy sidecar`;
+    }
+  }
+
   const portAclsAndRules = `${portAclsSection}
 
 # Access rules
@@ -626,7 +654,15 @@ acl localnet src fc00::/7
 acl localnet src fe80::/10
 
 ${portAclsAndRules}
-
+${apiProxyIp ? `
+# Allow connections to the AWF api-proxy sidecar before raw-IP deny rules.
+# Some HTTP clients (e.g., Node.js fetch / undici ProxyAgent) route requests to
+# the api-proxy via HTTP_PROXY without honouring NO_PROXY for raw IP addresses,
+# causing them to arrive at Squid and be rejected by the raw-IP deny rule below.
+# This allow rule fires first for the known api-proxy IP.
+acl allow_api_proxy_ip dst ${apiProxyIp}
+http_access allow allow_api_proxy_ip
+` : ''}
 # Deny CONNECT to raw IP addresses (IPv4 and IPv6)
 # Prevents bypassing domain-based filtering via direct IP connections
 acl dst_ipv4 dstdom_regex ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$
@@ -709,7 +745,7 @@ shutdown_lifetime 0 seconds
  * enricher skips them and attributes those denials to "unknown".
  */
 export function generatePolicyManifest(config: SquidConfig): PolicyManifest {
-  const { domains, blockedDomains, sslBump, enableHostAccess, allowHostPorts, enableDlp, dnsServers } = config;
+  const { domains, blockedDomains, sslBump, enableHostAccess, allowHostPorts, enableDlp, dnsServers, apiProxyIp } = config;
 
   // Parse, deduplicate, and group domains by protocol (shared logic with generateSquidConfig)
   const { domainsByProto, patternsByProto } = parseDomainConfig(domains);
@@ -736,6 +772,19 @@ export function generatePolicyManifest(config: SquidConfig): PolicyManifest {
     domains: [],
     description: 'Deny CONNECT (HTTPS) to ports not in Safe_ports ACL',
   });
+
+  // --- api-proxy allow (before raw-IP deny) ---
+  if (apiProxyIp) {
+    rules.push({
+      id: 'allow-api-proxy-ip',
+      order: ++order,
+      action: 'allow',
+      aclName: 'allow_api_proxy_ip',
+      protocol: 'both',
+      domains: [apiProxyIp],
+      description: 'Allow connections to the AWF api-proxy sidecar IP before raw-IP deny rules',
+    });
+  }
 
   // --- Raw IP blocking ---
   rules.push({
