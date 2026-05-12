@@ -389,6 +389,37 @@ function isApiProxyStartupFailureError(errorMsg: string): boolean {
 }
 
 /**
+ * Some docker compose failures surface only as a generic execa error message
+ * while the actionable api-proxy state is visible only via container inspect.
+ */
+async function didApiProxyFailStartup(errorMsg: string): Promise<boolean> {
+  if (isApiProxyStartupFailureError(errorMsg)) {
+    return true;
+  }
+
+  try {
+    const result = await execa(
+      'docker',
+      ['inspect', API_PROXY_CONTAINER_NAME, '--format', '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}'],
+      {
+        reject: false,
+        env: getLocalDockerEnv(),
+      }
+    );
+
+    if (result.exitCode !== 0) {
+      return false;
+    }
+
+    const [containerStatus = '', healthStatus = ''] = result.stdout.trim().split('|');
+    return containerStatus === 'exited' || healthStatus === 'unhealthy';
+  } catch (error) {
+    logger.debug(`Could not inspect ${API_PROXY_CONTAINER_NAME} after startup failure:`, error);
+    return false;
+  }
+}
+
+/**
  * Dumps the tail of a container's logs to stderr for diagnosis.
  * Silently skips if the container does not exist or logs are unavailable.
  */
@@ -463,11 +494,12 @@ export async function startContainers(workDir: string, allowedDomains: string[],
     logger.success('Containers started successfully');
   } catch (firstError) {
     const firstErrorMsg = firstError instanceof Error ? firstError.message : String(firstError);
+    const firstAttemptApiProxyStartupFailure = await didApiProxyFailStartup(firstErrorMsg);
 
     // When api-proxy specifically fails to start, retry once.
     // Transient failures are common on slow or busy runners (e.g. Azure-hosted runners)
     // where the Node.js process inside the container takes longer to bind its port.
-    if (isApiProxyStartupFailureError(firstErrorMsg)) {
+    if (firstAttemptApiProxyStartupFailure) {
       logger.warn(`${API_PROXY_CONTAINER_NAME} failed to start — this may be a transient startup failure, retrying once...`);
       await logContainerLogsToStderr(API_PROXY_CONTAINER_NAME);
 
@@ -491,7 +523,7 @@ export async function startContainers(workDir: string, allowedDomains: string[],
         return;
       } catch (retryError) {
         const retryErrorMsg = retryError instanceof Error ? retryError.message : String(retryError);
-        if (isApiProxyStartupFailureError(retryErrorMsg)) {
+        if (await didApiProxyFailStartup(retryErrorMsg)) {
           // Surface api-proxy logs and emit a clear, unambiguous error so
           // downstream parse steps don't blame the model for never running.
           await logContainerLogsToStderr(API_PROXY_CONTAINER_NAME);
