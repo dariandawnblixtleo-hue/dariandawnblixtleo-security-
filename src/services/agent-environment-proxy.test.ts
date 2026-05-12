@@ -41,7 +41,7 @@ describe('agent environment: proxy settings', () => {
 
     // Yarn 4 (undici), Corepack, and some Node.js HTTP clients only check lowercase
     expect(env.https_proxy).toBe(env.HTTPS_PROXY);
-    // http_proxy is intentionally NOT set - see comment in docker-manager.ts
+    // http_proxy is intentionally NOT set - see comment in agent-environment.ts
     expect(env.http_proxy).toBeUndefined();
   });
 
