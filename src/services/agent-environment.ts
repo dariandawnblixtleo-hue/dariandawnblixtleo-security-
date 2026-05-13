@@ -28,6 +28,10 @@ interface AgentEnvironmentParams {
   sslConfig?: SslConfig;
 }
 
+// Use a GitHub-token-shaped placeholder so Copilot CLI auth prechecks pass
+// before requests are routed to the api-proxy sidecar for real token injection.
+const COPILOT_PLACEHOLDER_TOKEN = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
 /**
  * Builds the environment variable map for the agent container.
  * Returns a mutable object; callers (api-proxy, cli-proxy service builders)
@@ -152,13 +156,13 @@ export function buildAgentEnvironment(params: AgentEnvironmentParams): Record<st
   // When api-proxy is enabled with Copilot, set placeholder tokens early
   // so --env-all won't override them with real values from host environment
   if (config.enableApiProxy && config.copilotGithubToken) {
-    environment.COPILOT_GITHUB_TOKEN = 'placeholder-token-for-credential-isolation';
+    environment.COPILOT_GITHUB_TOKEN = COPILOT_PLACEHOLDER_TOKEN;
     logger.debug('COPILOT_GITHUB_TOKEN set to placeholder value (early) to prevent --env-all override');
   }
   if (config.enableApiProxy && config.copilotApiKey) {
-    environment.COPILOT_API_KEY = 'placeholder-token-for-credential-isolation';
+    environment.COPILOT_API_KEY = COPILOT_PLACEHOLDER_TOKEN;
     logger.debug('COPILOT_API_KEY set to placeholder value (early) to prevent --env-all override');
-    environment.COPILOT_PROVIDER_API_KEY = 'placeholder-token-for-credential-isolation';
+    environment.COPILOT_PROVIDER_API_KEY = COPILOT_PLACEHOLDER_TOKEN;
     logger.debug('COPILOT_PROVIDER_API_KEY set to placeholder value (early) to prevent --env-all override');
   }
 

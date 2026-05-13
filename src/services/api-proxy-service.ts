@@ -33,6 +33,7 @@ interface ApiProxyServiceParams {
 // "copilot/o3-mini"). Prefix is intentionally broad because model providers/prefixes
 // are runtime-configurable and not limited to a fixed allowlist.
 const RESPONSES_WIRE_API_MODEL_PATTERN = /(^|[/:])(gpt-5|o3)([-_.]|$)/i;
+const COPILOT_PLACEHOLDER_TOKEN = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 function getCopilotModel(config: WrapperConfig): string | undefined {
   const envFileModel = config.envFile
@@ -267,7 +268,7 @@ export function buildApiProxyService(params: ApiProxyServiceParams): ApiProxyBui
 
     // Set placeholder token for GitHub Copilot CLI compatibility
     // Real authentication happens via COPILOT_API_URL pointing to api-proxy
-    agentEnvAdditions.COPILOT_TOKEN = 'placeholder-token-for-credential-isolation';
+    agentEnvAdditions.COPILOT_TOKEN = COPILOT_PLACEHOLDER_TOKEN;
     logger.debug('COPILOT_TOKEN set to placeholder value for credential isolation');
 
     // Note: COPILOT_GITHUB_TOKEN and COPILOT_API_KEY placeholders are set early (before --env-all)
