@@ -9,6 +9,7 @@ import { buildRuntimeImageRef } from '../image-tag';
 import { logger } from '../logger';
 import { WrapperConfig, API_PROXY_PORTS, API_PROXY_HEALTH_PORT } from '../types';
 import { pickEnvVars } from '../env-utils';
+import { COPILOT_PLACEHOLDER_TOKEN } from '../constants/placeholders';
 import { NetworkConfig, ImageBuildConfig } from './squid-service';
 
 interface ApiProxyBuildResult {
@@ -33,8 +34,6 @@ interface ApiProxyServiceParams {
 // "copilot/o3-mini"). Prefix is intentionally broad because model providers/prefixes
 // are runtime-configurable and not limited to a fixed allowlist.
 const RESPONSES_WIRE_API_MODEL_PATTERN = /(^|[/:])(gpt-5|o3)([-_.]|$)/i;
-const COPILOT_PLACEHOLDER_TOKEN = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-
 function getCopilotModel(config: WrapperConfig): string | undefined {
   const envFileModel = config.envFile
     ? readEnvFile(config.envFile).COPILOT_MODEL

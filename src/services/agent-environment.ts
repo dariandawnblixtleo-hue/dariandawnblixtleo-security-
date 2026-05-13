@@ -17,6 +17,7 @@ import {
 import { logger } from '../logger';
 import { PROXY_ENV_VARS } from '../upstream-proxy';
 import { WrapperConfig } from '../types';
+import { COPILOT_PLACEHOLDER_TOKEN } from '../constants/placeholders';
 import { NetworkConfig } from './squid-service';
 
 // ─── Agent Environment ────────────────────────────────────────────────────────
@@ -27,10 +28,6 @@ interface AgentEnvironmentParams {
   dnsServers: string[];
   sslConfig?: SslConfig;
 }
-
-// Use a GitHub-token-shaped placeholder so Copilot CLI auth prechecks pass
-// before requests are routed to the api-proxy sidecar for real token injection.
-const COPILOT_PLACEHOLDER_TOKEN = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 /**
  * Builds the environment variable map for the agent container.

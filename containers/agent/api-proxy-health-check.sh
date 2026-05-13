@@ -10,6 +10,7 @@
 
 set -e
 
+# Must match src/constants/placeholders.ts (COPILOT_PLACEHOLDER_TOKEN)
 COPILOT_PLACEHOLDER_TOKEN="ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 echo "[health-check] API Proxy Pre-flight Check"
