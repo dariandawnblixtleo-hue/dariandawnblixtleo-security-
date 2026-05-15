@@ -23,6 +23,15 @@ const {
 } = require('../proxy-utils');
 const { URL } = require('url');
 
+// AWF injects this sentinel value into the agent environment for credential isolation.
+// The ghu_ prefix is intentional: it matches the GitHub token shape that Copilot CLI
+// auth pre-checks expect, but the 36 repeated 'a' characters make it unambiguous as
+// a non-real placeholder.  It is defined in src/constants/placeholders.ts and must
+// stay in sync.  When this value appears as COPILOT_API_KEY in the sidecar environment
+// it means the sidecar received a dummy key (not a real BYOK credential) and should
+// fall back to COPILOT_GITHUB_TOKEN as the sole auth source.
+const COPILOT_PLACEHOLDER_TOKEN = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
 /**
  * Strip any accidental "Bearer " prefix from a raw credential value and trim
  * surrounding whitespace.  Returns undefined when the result is empty so that
@@ -39,8 +48,26 @@ function stripBearerPrefix(value) {
 }
 
 /**
+ * Returns the COPILOT_API_KEY value from env if it is a real BYOK credential,
+ * or undefined in two cases:
+ *   1. COPILOT_API_KEY is not set (or is empty/whitespace-only).
+ *   2. COPILOT_API_KEY equals the known AWF placeholder sentinel — it was injected
+ *      by AWF for credential isolation and is not a usable BYOK credential.
+ *
+ * @param {Record<string, string|undefined>} env - Environment variables to inspect
+ * @returns {string|undefined} The real BYOK key, or undefined when absent or placeholder.
+ */
+function resolveApiKey(env) {
+  const key = stripBearerPrefix(env.COPILOT_API_KEY);
+  return key === COPILOT_PLACEHOLDER_TOKEN ? undefined : key;
+}
+
+/**
  * Resolves the Copilot auth token from environment variables.
  * COPILOT_GITHUB_TOKEN (GitHub OAuth) takes precedence over COPILOT_API_KEY (direct key).
+ *
+ * The AWF placeholder token is treated as absent so that when AWF injects it as
+ * a dummy COPILOT_API_KEY the sidecar still uses COPILOT_GITHUB_TOKEN for auth.
  *
  * Any accidental "Bearer " prefix is stripped via stripBearerPrefix so that
  * the injected Authorization header is exactly "Bearer <token>" rather than
@@ -51,7 +78,7 @@ function stripBearerPrefix(value) {
  * @returns {string|undefined} The resolved auth token, or undefined if neither is set
  */
 function resolveCopilotAuthToken(env = process.env) {
-  return stripBearerPrefix(env.COPILOT_GITHUB_TOKEN) || stripBearerPrefix(env.COPILOT_API_KEY);
+  return stripBearerPrefix(env.COPILOT_GITHUB_TOKEN) || resolveApiKey(env);
 }
 
 /**
@@ -197,7 +224,8 @@ function normalizeNullTypeToolCalls(body) {
  */
 function createCopilotAdapter(env, deps = {}) {
   const githubToken = stripBearerPrefix(env.COPILOT_GITHUB_TOKEN);
-  const apiKey = stripBearerPrefix(env.COPILOT_API_KEY);
+  // resolveApiKey filters out the AWF placeholder so it is never used as a real BYOK credential.
+  const apiKey = resolveApiKey(env);
   const authToken = resolveCopilotAuthToken(env);
   const integrationId = env.COPILOT_INTEGRATION_ID || 'copilot-developer-cli';
   const rawTarget = deriveCopilotApiTarget(env);
@@ -378,10 +406,12 @@ module.exports = {
   // Exported for unit-test access only; not part of the public API.
   _testing: {
     resolveCopilotAuthToken,
+    resolveApiKey,
     stripBearerPrefix,
     deriveCopilotApiTarget,
     deriveGitHubApiTarget,
     deriveGitHubApiBasePath,
     normalizeNullTypeToolCalls,
+    COPILOT_PLACEHOLDER_TOKEN,
   },
 };
