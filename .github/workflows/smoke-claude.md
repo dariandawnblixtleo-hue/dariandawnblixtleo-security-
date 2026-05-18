@@ -53,10 +53,12 @@ steps:
       mkdir -p /tmp/gh-aw/mcp-logs/playwright
       chmod 777 /tmp/gh-aw/mcp-logs/playwright
   - name: Create smoke test file
+    env:
+      EXPR_GITHUB_RUN_ID: ${{ github.run_id }}
     run: |
       mkdir -p /tmp/gh-aw/agent
-      echo "Smoke test passed for Claude at $(date)" > /tmp/gh-aw/agent/smoke-test-claude-${{ github.run_id }}.txt
-      echo "Smoke test file pre-created at /tmp/gh-aw/agent/smoke-test-claude-${{ github.run_id }}.txt"
+      echo "Smoke test passed for Claude at $(date)" > /tmp/gh-aw/agent/smoke-test-claude-$EXPR_GITHUB_RUN_ID.txt
+      echo "Smoke test file pre-created at /tmp/gh-aw/agent/smoke-test-claude-$EXPR_GITHUB_RUN_ID.txt"
 post-steps:
   - name: Show final Claude Code config
     if: always()
