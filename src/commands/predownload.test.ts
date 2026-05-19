@@ -1,6 +1,6 @@
-import { resolveImages, predownloadCommand } from './predownload';
+import { predownloadCommand } from './predownload';
 
-type PredownloadOptions = Parameters<typeof resolveImages>[0];
+type PredownloadOptions = Parameters<typeof predownloadCommand>[0];
 
 // Mock execa
 jest.mock('execa', () => {
@@ -12,118 +12,6 @@ jest.mock('execa', () => {
 const execa = require('execa').default as jest.Mock;
 
 describe('predownload', () => {
-  describe('resolveImages', () => {
-    const defaults: PredownloadOptions = {
-      imageRegistry: 'ghcr.io/github/gh-aw-firewall',
-      imageTag: 'latest',
-      agentImage: 'default',
-      enableApiProxy: false,
-    };
-
-    it('should resolve squid and default agent images', () => {
-      const images = resolveImages(defaults);
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:latest',
-        'ghcr.io/github/gh-aw-firewall/agent:latest',
-      ]);
-    });
-
-    it('should resolve agent-act image for act preset', () => {
-      const images = resolveImages({ ...defaults, agentImage: 'act' });
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:latest',
-        'ghcr.io/github/gh-aw-firewall/agent-act:latest',
-      ]);
-    });
-
-    it('should include api-proxy when enabled', () => {
-      const images = resolveImages({ ...defaults, enableApiProxy: true });
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:latest',
-        'ghcr.io/github/gh-aw-firewall/agent:latest',
-        'ghcr.io/github/gh-aw-firewall/api-proxy:latest',
-      ]);
-    });
-
-    it('should include cli-proxy when enabled (no mcpg — runs externally)', () => {
-      const images = resolveImages({ ...defaults, difcProxy: true });
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:latest',
-        'ghcr.io/github/gh-aw-firewall/agent:latest',
-        'ghcr.io/github/gh-aw-firewall/cli-proxy:latest',
-      ]);
-    });
-
-    it('should include both api-proxy and cli-proxy when both enabled', () => {
-      const images = resolveImages({ ...defaults, enableApiProxy: true, difcProxy: true });
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:latest',
-        'ghcr.io/github/gh-aw-firewall/agent:latest',
-        'ghcr.io/github/gh-aw-firewall/api-proxy:latest',
-        'ghcr.io/github/gh-aw-firewall/cli-proxy:latest',
-      ]);
-    });
-
-    it('should use custom registry and tag', () => {
-      const images = resolveImages({
-        ...defaults,
-        imageRegistry: 'my-registry.io/awf',
-        imageTag: 'v1.0.0',
-      });
-      expect(images).toEqual([
-        'my-registry.io/awf/squid:v1.0.0',
-        'my-registry.io/awf/agent:v1.0.0',
-      ]);
-    });
-
-    it('should append per-image digests from image-tag metadata', () => {
-      const images = resolveImages({
-        ...defaults,
-        imageTag: [
-          '0.25.18',
-          'squid=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          'agent=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          'api-proxy=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-          'cli-proxy=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-        ].join(','),
-        enableApiProxy: true,
-        difcProxy: true,
-      });
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:0.25.18@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        'ghcr.io/github/gh-aw-firewall/agent:0.25.18@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        'ghcr.io/github/gh-aw-firewall/api-proxy:0.25.18@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-        'ghcr.io/github/gh-aw-firewall/cli-proxy:0.25.18@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-      ]);
-    });
-
-    it('should use custom agent image as-is', () => {
-      const images = resolveImages({ ...defaults, agentImage: 'ubuntu:22.04' });
-      expect(images).toEqual([
-        'ghcr.io/github/gh-aw-firewall/squid:latest',
-        'ubuntu:22.04',
-      ]);
-    });
-
-    it('should reject custom image starting with dash', () => {
-      expect(() => resolveImages({ ...defaults, agentImage: '--help' })).toThrow(
-        'must not start with "-"',
-      );
-    });
-
-    it('should reject custom image containing whitespace', () => {
-      expect(() => resolveImages({ ...defaults, agentImage: 'ubuntu 22.04' })).toThrow(
-        'must not contain whitespace',
-      );
-    });
-
-    it('should reject invalid image-tag digest metadata', () => {
-      expect(() =>
-        resolveImages({ ...defaults, imageTag: '0.25.18,squid=sha256:not-a-real-digest' })
-      ).toThrow('Invalid --image-tag digest');
-    });
-  });
-
   describe('predownloadCommand', () => {
     const defaults: PredownloadOptions = {
       imageRegistry: 'ghcr.io/github/gh-aw-firewall',
