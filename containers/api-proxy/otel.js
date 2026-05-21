@@ -449,17 +449,17 @@ function setTokenAttributes(span, { provider, model, normalizedUsage, streaming 
       'gen_ai.usage.input_tokens':      normalizedUsage.input_tokens,
       'gen_ai.usage.output_tokens':     normalizedUsage.output_tokens,
       'gen_ai.request.stream':          streaming,
-      // Cache and reasoning as strings (Sentry drops unknown numeric attrs but keeps strings)
-      'awf.cache_read_tokens':          String(normalizedUsage.cache_read_tokens),
-      'awf.cache_write_tokens':         String(normalizedUsage.cache_write_tokens),
-      'awf.reasoning_tokens':           String(normalizedUsage.reasoning_tokens || 0),
+      // Cache and reasoning as strings — avoid "token" in name (Sentry PII scrubber redacts it)
+      'awf.cached_read':                String(normalizedUsage.cache_read_tokens),
+      'awf.cached_write':               String(normalizedUsage.cache_write_tokens),
+      'awf.reasoning':                  String(normalizedUsage.reasoning_tokens || 0),
     });
     span.addEvent('gen_ai.usage', {
       'gen_ai.usage.input_tokens':      normalizedUsage.input_tokens,
       'gen_ai.usage.output_tokens':     normalizedUsage.output_tokens,
-      'awf.cache_read_tokens':          String(normalizedUsage.cache_read_tokens),
-      'awf.cache_write_tokens':         String(normalizedUsage.cache_write_tokens),
-      'awf.reasoning_tokens':           String(normalizedUsage.reasoning_tokens || 0),
+      'awf.cached_read':                String(normalizedUsage.cache_read_tokens),
+      'awf.cached_write':               String(normalizedUsage.cache_write_tokens),
+      'awf.reasoning':                  String(normalizedUsage.reasoning_tokens || 0),
     });
   } catch { /* best-effort */ }
 }
