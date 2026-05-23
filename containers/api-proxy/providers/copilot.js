@@ -20,6 +20,7 @@ const {
   makeProviderNotConfiguredResponse,
   createAdapterMethods,
   composeBodyTransforms,
+  cleanAnthropicBetaHeader,
 } = require('../proxy-utils');
 const { sanitizeNullToolCallTypes } = require('../body-transform');
 const { URL } = require('url');
@@ -316,19 +317,21 @@ function createCopilotAdapter(env, deps = {}) {
       }
 
       const isModelsPath = reqPathname === '/models' || reqPathname.startsWith('/models/');
-      if (isModelsPath && req.method === 'GET' && githubToken) {
-        return {
-          'Authorization': `Bearer ${githubToken}`,
-          'Copilot-Integration-Id': integrationId,
-        };
+      const authHeaders = isModelsPath && req.method === 'GET' && githubToken
+        ? { 'Authorization': `Bearer ${githubToken}`, 'Copilot-Integration-Id': integrationId }
+        : { 'Authorization': `Bearer ${authToken}`, 'Copilot-Integration-Id': integrationId };
+
+      // Strip deprecated Anthropic beta flags injected by the Copilot CLI when
+      // targeting a 1M-context model (e.g. `context-1m-2025-08-07`). Anthropic
+      // now rejects these with a 400. Setting the key to `undefined` signals
+      // proxy-request.js to suppress the header entirely.
+      const rawBeta = req.headers['anthropic-beta'];
+      if (rawBeta !== undefined) {
+        authHeaders['anthropic-beta'] = cleanAnthropicBetaHeader(rawBeta);
       }
 
-      return {
-        'Authorization': `Bearer ${authToken}`,
-        'Copilot-Integration-Id': integrationId,
-      };
+      return authHeaders;
     },
-
     getBodyTransform() { return bodyTransform; },
     ...adapterMethods,
 

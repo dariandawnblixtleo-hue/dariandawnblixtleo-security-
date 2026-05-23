@@ -145,6 +145,28 @@ function shouldStripHeader(name) {
 }
 
 /**
+ * Anthropic beta header values that are deprecated and cause a 400 error when
+ * forwarded to the Anthropic API (or through GitHub Copilot to Anthropic).
+ */
+const DEPRECATED_ANTHROPIC_BETA_FLAGS = new Set([
+  'context-1m-2025-08-07',
+]);
+
+/**
+ * Clean an `anthropic-beta` header value by removing deprecated flags.
+ *
+ * @param {string | string[] | undefined} rawBeta - The incoming `anthropic-beta` header value
+ * @returns {string | undefined} Cleaned comma-separated beta flags, or `undefined` when
+ *   the result is empty (meaning the header should be suppressed entirely).
+ */
+function cleanAnthropicBetaHeader(rawBeta) {
+  if (!rawBeta) return undefined;
+  const normalized = Array.isArray(rawBeta) ? rawBeta.join(',') : rawBeta;
+  const cleaned = normalized.split(',').map(s => s.trim()).filter(s => s && !DEPRECATED_ANTHROPIC_BETA_FLAGS.has(s));
+  return cleaned.length > 0 ? cleaned.join(',') : undefined;
+}
+
+/**
  * Compose two body-transform functions into a single transform.
  * Each transform accepts a Buffer and returns a Buffer (modified) or null (no change).
  *
@@ -360,6 +382,8 @@ module.exports = {
   buildUpstreamPath,
   stripGeminiKeyParam,
   shouldStripHeader,
+  cleanAnthropicBetaHeader,
+  DEPRECATED_ANTHROPIC_BETA_FLAGS,
   composeBodyTransforms,
   makeProviderNotConfiguredResponse,
   createBaseAdapterConfig,

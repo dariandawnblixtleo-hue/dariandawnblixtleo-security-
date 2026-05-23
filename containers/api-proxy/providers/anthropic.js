@@ -16,6 +16,7 @@ const {
   makeProviderNotConfiguredResponse,
   createBaseAdapterConfig,
   createAdapterMethods,
+  cleanAnthropicBetaHeader,
 } = require('../proxy-utils');
 
 let makeAnthropicTransform, loadCustomTransform, EXTENDED_CACHE_BETA;
@@ -124,17 +125,22 @@ function createAnthropicAdapter(env, deps = {}) {
         headers['anthropic-version'] = '2023-06-01';
       }
 
-      if (autoCache) {
-        const existing = req.headers['anthropic-beta'];
-        if (!existing) {
-          headers['anthropic-beta'] = EXTENDED_CACHE_BETA;
-        } else {
-          const normalizedExisting = Array.isArray(existing) ? existing.join(',') : existing;
-          const existingBetas = normalizedExisting.split(',').map(s => s.trim()).filter(Boolean);
-          if (!existingBetas.includes(EXTENDED_CACHE_BETA)) {
-            headers['anthropic-beta'] = `${normalizedExisting},${EXTENDED_CACHE_BETA}`;
-          }
-        }
+      // Strip deprecated beta flags from the client header, then optionally
+      // add the extended-cache-ttl flag for auto-cache. Setting a key to
+      // `undefined` signals proxy-request.js to suppress the header entirely.
+      const cleaned = cleanAnthropicBetaHeader(req.headers['anthropic-beta']);
+      const cleanedBetas = cleaned ? cleaned.split(',') : [];
+
+      if (autoCache && !cleanedBetas.includes(EXTENDED_CACHE_BETA)) {
+        cleanedBetas.push(EXTENDED_CACHE_BETA);
+      }
+
+      if (cleanedBetas.length > 0) {
+        headers['anthropic-beta'] = cleanedBetas.join(',');
+      } else if (req.headers['anthropic-beta'] !== undefined) {
+        // The client sent a beta header but all values were deprecated.
+        // Explicitly suppress it so no stale value is forwarded upstream.
+        headers['anthropic-beta'] = undefined;
       }
 
       return headers;

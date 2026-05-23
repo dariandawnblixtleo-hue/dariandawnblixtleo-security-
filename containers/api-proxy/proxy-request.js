@@ -363,6 +363,10 @@ function proxyRequest(req, res, targetHost, injectHeaders, provider, basePath = 
     }
     headers['x-request-id'] = requestId;
     Object.assign(headers, injectHeaders);
+    // Remove headers explicitly suppressed by the adapter (undefined = suppress the header).
+    for (const key of Object.keys(headers)) {
+      if (headers[key] === undefined) delete headers[key];
+    }
 
     const isCopilotHost =
       targetHost === 'githubcopilot.com' ||

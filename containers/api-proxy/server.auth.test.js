@@ -4,7 +4,7 @@
  * Extracted from server.test.js lines 491–523, 886–1064.
  */
 
-const { shouldStripHeader } = require('./proxy-utils');
+const { shouldStripHeader, cleanAnthropicBetaHeader, DEPRECATED_ANTHROPIC_BETA_FLAGS } = require('./proxy-utils');
 const {
   _testing: {
     resolveCopilotAuthToken,
@@ -15,6 +15,7 @@ const {
   },
   createCopilotAdapter,
 } = require('./providers/copilot');
+const { createAnthropicAdapter } = require('./providers/anthropic');
 const { sanitizeNullToolCallTypes } = require('./body-transform');
 
 describe('shouldStripHeader', () => {
@@ -346,5 +347,120 @@ describe('createCopilotAdapter — BYOK getAuthHeaders', () => {
   it('defaults to empty base path when COPILOT_API_BASE_PATH is not set', () => {
     const adapter = createCopilotAdapter({ COPILOT_API_KEY: 'sk-or-v1-abc123' });
     expect(adapter.getBasePath()).toBe('');
+  });
+});
+
+describe('cleanAnthropicBetaHeader', () => {
+  it('returns undefined when input is undefined', () => {
+    expect(cleanAnthropicBetaHeader(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined when input is empty string', () => {
+    expect(cleanAnthropicBetaHeader('')).toBeUndefined();
+  });
+
+  it('returns undefined when all values are deprecated', () => {
+    expect(cleanAnthropicBetaHeader('context-1m-2025-08-07')).toBeUndefined();
+  });
+
+  it('strips the deprecated context-1m-2025-08-07 flag', () => {
+    const result = cleanAnthropicBetaHeader('context-1m-2025-08-07,interleaved-thinking-2025-05-14');
+    expect(result).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('passes through non-deprecated flags unchanged', () => {
+    expect(cleanAnthropicBetaHeader('interleaved-thinking-2025-05-14')).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('normalises array input to a comma-separated string', () => {
+    const result = cleanAnthropicBetaHeader(['context-1m-2025-08-07', 'interleaved-thinking-2025-05-14']);
+    expect(result).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('trims whitespace around individual flag values', () => {
+    expect(cleanAnthropicBetaHeader(' context-1m-2025-08-07 , interleaved-thinking-2025-05-14 ')).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('DEPRECATED_ANTHROPIC_BETA_FLAGS includes context-1m-2025-08-07', () => {
+    expect(DEPRECATED_ANTHROPIC_BETA_FLAGS.has('context-1m-2025-08-07')).toBe(true);
+  });
+});
+
+describe('createAnthropicAdapter — deprecated beta header stripping in getAuthHeaders', () => {
+  const makeReq = (betaHeader) => ({
+    headers: betaHeader !== undefined ? { 'anthropic-beta': betaHeader } : {},
+  });
+
+  it('strips context-1m-2025-08-07 and suppresses the header when no valid flags remain', () => {
+    const adapter = createAnthropicAdapter({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const req = makeReq('context-1m-2025-08-07');
+    const headers = adapter.getAuthHeaders(req);
+    expect(headers['anthropic-beta']).toBeUndefined();
+  });
+
+  it('strips deprecated flag while preserving valid beta flags', () => {
+    const adapter = createAnthropicAdapter({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const req = makeReq('context-1m-2025-08-07,interleaved-thinking-2025-05-14');
+    const headers = adapter.getAuthHeaders(req);
+    expect(headers['anthropic-beta']).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('passes through valid beta flags unchanged when no deprecated flags present', () => {
+    const adapter = createAnthropicAdapter({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const req = makeReq('interleaved-thinking-2025-05-14');
+    const headers = adapter.getAuthHeaders(req);
+    expect(headers['anthropic-beta']).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('does not set anthropic-beta when client sends no beta header', () => {
+    const adapter = createAnthropicAdapter({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const req = makeReq(undefined);
+    const headers = adapter.getAuthHeaders(req);
+    expect(headers['anthropic-beta']).toBeUndefined();
+  });
+
+  it('always sets x-api-key regardless of beta header', () => {
+    const adapter = createAnthropicAdapter({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const headers = adapter.getAuthHeaders(makeReq('context-1m-2025-08-07'));
+    expect(headers['x-api-key']).toBe('sk-ant-test');
+  });
+});
+
+describe('createCopilotAdapter — deprecated beta header stripping in getAuthHeaders', () => {
+  const makeReq = (betaHeader) => ({
+    url: '/v1/chat/completions',
+    method: 'POST',
+    headers: betaHeader !== undefined ? { 'anthropic-beta': betaHeader } : {},
+  });
+
+  it('strips context-1m-2025-08-07 and sets anthropic-beta to undefined', () => {
+    const adapter = createCopilotAdapter({ COPILOT_API_KEY: 'sk-or-v1-abc123' });
+    const headers = adapter.getAuthHeaders(makeReq('context-1m-2025-08-07'));
+    expect(headers['anthropic-beta']).toBeUndefined();
+  });
+
+  it('strips deprecated flag while preserving valid beta flags', () => {
+    const adapter = createCopilotAdapter({ COPILOT_API_KEY: 'sk-or-v1-abc123' });
+    const headers = adapter.getAuthHeaders(makeReq('context-1m-2025-08-07,interleaved-thinking-2025-05-14'));
+    expect(headers['anthropic-beta']).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('does not set anthropic-beta when client sends no beta header', () => {
+    const adapter = createCopilotAdapter({ COPILOT_API_KEY: 'sk-or-v1-abc123' });
+    const headers = adapter.getAuthHeaders(makeReq(undefined));
+    expect(Object.prototype.hasOwnProperty.call(headers, 'anthropic-beta')).toBe(false);
+  });
+
+  it('passes through valid beta flags unchanged', () => {
+    const adapter = createCopilotAdapter({ COPILOT_API_KEY: 'sk-or-v1-abc123' });
+    const headers = adapter.getAuthHeaders(makeReq('interleaved-thinking-2025-05-14'));
+    expect(headers['anthropic-beta']).toBe('interleaved-thinking-2025-05-14');
+  });
+
+  it('still injects Authorization and Copilot-Integration-Id when beta stripping occurs', () => {
+    const adapter = createCopilotAdapter({ COPILOT_API_KEY: 'sk-or-v1-abc123' });
+    const headers = adapter.getAuthHeaders(makeReq('context-1m-2025-08-07'));
+    expect(headers['Authorization']).toBe('Bearer sk-or-v1-abc123');
+    expect(headers['Copilot-Integration-Id']).toBe('copilot-developer-cli');
   });
 });
