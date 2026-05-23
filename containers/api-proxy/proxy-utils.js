@@ -162,7 +162,8 @@ const DEPRECATED_ANTHROPIC_BETA_FLAGS = new Set([
 function cleanAnthropicBetaHeader(rawBeta) {
   if (!rawBeta) return undefined;
   const normalized = Array.isArray(rawBeta) ? rawBeta.join(',') : rawBeta;
-  const cleaned = normalized.split(',').map(s => s.trim()).filter(s => s && !DEPRECATED_ANTHROPIC_BETA_FLAGS.has(s));
+  const isNotDeprecated = (flag) => flag && !DEPRECATED_ANTHROPIC_BETA_FLAGS.has(flag);
+  const cleaned = normalized.split(',').map(s => s.trim()).filter(isNotDeprecated);
   return cleaned.length > 0 ? cleaned.join(',') : undefined;
 }
 

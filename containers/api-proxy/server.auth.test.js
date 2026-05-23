@@ -372,7 +372,7 @@ describe('cleanAnthropicBetaHeader', () => {
     expect(cleanAnthropicBetaHeader('interleaved-thinking-2025-05-14')).toBe('interleaved-thinking-2025-05-14');
   });
 
-  it('normalises array input to a comma-separated string', () => {
+  it('normalizes array input to a comma-separated string', () => {
     const result = cleanAnthropicBetaHeader(['context-1m-2025-08-07', 'interleaved-thinking-2025-05-14']);
     expect(result).toBe('interleaved-thinking-2025-05-14');
   });
