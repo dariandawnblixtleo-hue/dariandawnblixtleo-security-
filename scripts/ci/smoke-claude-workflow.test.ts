@@ -10,6 +10,7 @@ describe('smoke claude workflow optimization config', () => {
     const source = fs.readFileSync(smokeClaudeSourcePath, 'utf-8');
 
     expect(source).toContain('max-turns: 5');
+    expect(source).toContain('actions: read');
     expect(source).toContain('Check GitHub.com reachability');
     expect(source).toContain('/tmp/gh-aw/agent/smoke-context.txt');
     expect(source).toContain('curl -fsSL --max-time 15 https://github.com');
@@ -28,6 +29,7 @@ describe('smoke claude workflow optimization config', () => {
     const lock = fs.readFileSync(smokeClaudeLockPath, 'utf-8');
 
     expect(lock).toContain('--max-turns 5');
+    expect(lock).toContain('actions: read');
     expect(lock).toContain('Check GitHub.com reachability');
     expect(lock).toContain('playwright_check=✅ PASS');
     expect(lock).toContain(

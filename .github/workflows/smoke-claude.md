@@ -8,6 +8,7 @@ on:
     types: [opened, synchronize, reopened]
   reaction: "heart"
 permissions:
+  actions: read
   contents: read
   issues: read
   pull-requests: read
