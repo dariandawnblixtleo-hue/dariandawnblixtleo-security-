@@ -20,7 +20,6 @@ tools:
 sandbox:
   agent:
     id: awf
-    version: v0.25.41
 network:
   allowed:
     - github
@@ -85,8 +84,10 @@ steps:
 
   - name: Set security relevance count
     id: security-relevance
+    env:
+      EXPR_NEEDS_CHECK_SECURITY_RELEVANCE_OUTPUTS_SECURITY_FILES_CHANGED: ${{ needs.check_security_relevance.outputs.security_files_changed }}
     run: |
-      echo "security_files_changed=${{ needs.check_security_relevance.outputs.security_files_changed }}" >> "$GITHUB_OUTPUT"
+      echo "security_files_changed=$EXPR_NEEDS_CHECK_SECURITY_RELEVANCE_OUTPUTS_SECURITY_FILES_CHANGED" >> "$GITHUB_OUTPUT"
 
 ---
 

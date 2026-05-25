@@ -54,7 +54,6 @@ timeout-minutes: 45
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 strict: true
 ---
 

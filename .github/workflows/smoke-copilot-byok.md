@@ -42,7 +42,6 @@ env:
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 strict: true
 steps:
   - name: Pre-compute BYOK smoke test data

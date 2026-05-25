@@ -23,7 +23,6 @@ timeout-minutes: 30
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 tools:
   github:
     toolsets: [default, pull_requests]
