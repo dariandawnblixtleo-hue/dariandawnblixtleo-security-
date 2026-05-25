@@ -45,7 +45,6 @@ timeout-minutes: 15
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 strict: true
 post-steps:
   - name: Validate safe outputs were invoked

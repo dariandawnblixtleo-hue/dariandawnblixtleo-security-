@@ -20,7 +20,6 @@ imports:
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 tools:
   cache-memory: true
   bash: true

@@ -31,7 +31,6 @@ timeout-minutes: 15
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 strict: true
 steps:
   - name: Install awf dependencies

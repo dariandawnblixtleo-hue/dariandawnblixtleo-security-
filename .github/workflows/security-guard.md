@@ -20,7 +20,6 @@ tools:
 sandbox:
   agent:
     id: awf
-    version: v0.25.41
 network:
   allowed:
     - github

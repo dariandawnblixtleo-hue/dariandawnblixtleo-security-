@@ -13,7 +13,6 @@ imports:
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 tools:
   github:
     toolsets: [issues, repos, search]

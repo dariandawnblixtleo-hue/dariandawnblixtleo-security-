@@ -13,7 +13,6 @@ permissions:
 sandbox:
   agent:
     id: awf
-    version: v0.25.29
 engine:
   id: claude
   model: claude-haiku-4-5
