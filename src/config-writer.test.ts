@@ -52,6 +52,7 @@ describe('writeConfigs', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-writer-test-'));
     jest.clearAllMocks();
+    (fs.chownSync as unknown as jest.Mock).mockImplementation(() => undefined);
     // getRealUserHome is used to locate host home subdirectories; point it at
     // tempDir so mkdirSync calls stay within the temp tree.
     (getRealUserHome as jest.Mock).mockReturnValue(tempDir);
@@ -118,6 +119,75 @@ describe('writeConfigs', () => {
       });
 
       expect(isOpenSslAvailable).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('directory setup', () => {
+    it('throws when workDir is a symlink', async () => {
+      const realWorkDir = path.join(tempDir, 'real-workdir');
+      const symlinkWorkDir = path.join(tempDir, 'symlink-workdir');
+      fs.mkdirSync(realWorkDir, { recursive: true });
+      fs.symlinkSync(realWorkDir, symlinkWorkDir);
+
+      await expect(
+        writeConfigs({
+          workDir: symlinkWorkDir,
+          sslBump: false,
+          allowedDomains: [],
+          agentCommand: 'echo test',
+          logLevel: 'info',
+          keepContainers: false,
+          buildLocal: false,
+          imageRegistry: 'ghcr.io/github/gh-aw-firewall',
+          imageTag: 'latest',
+        })
+      ).rejects.toThrow(`Refusing to use symlink as directory: ${symlinkWorkDir}`);
+    });
+
+    it('falls back to world-writable squid logs when squid chown fails', async () => {
+      const proxyLogsDir = path.join(tempDir, 'proxy-logs');
+      (fs.chownSync as unknown as jest.Mock).mockImplementation((targetPath: fs.PathLike) => {
+        if (String(targetPath) === proxyLogsDir) {
+          throw new Error('chown failed');
+        }
+      });
+
+      await writeConfigs({
+        workDir: tempDir,
+        sslBump: false,
+        allowedDomains: [],
+        agentCommand: 'echo test',
+        logLevel: 'info',
+        keepContainers: false,
+        buildLocal: false,
+        imageRegistry: 'ghcr.io/github/gh-aw-firewall',
+        imageTag: 'latest',
+        proxyLogsDir,
+      });
+
+      const squidLogsDirMode = fs.statSync(proxyLogsDir).mode & 0o777;
+      expect(squidLogsDirMode).toBe(0o777);
+    });
+
+    it('forces pre-existing mcp logs directory to mode 0o777', async () => {
+      const mcpLogsDir = '/tmp/gh-aw/mcp-logs';
+      fs.mkdirSync(mcpLogsDir, { recursive: true, mode: 0o700 });
+      fs.chmodSync(mcpLogsDir, 0o700);
+
+      await writeConfigs({
+        workDir: tempDir,
+        sslBump: false,
+        allowedDomains: [],
+        agentCommand: 'echo test',
+        logLevel: 'info',
+        keepContainers: false,
+        buildLocal: false,
+        imageRegistry: 'ghcr.io/github/gh-aw-firewall',
+        imageTag: 'latest',
+      });
+
+      const mcpLogsDirMode = fs.statSync(mcpLogsDir).mode & 0o777;
+      expect(mcpLogsDirMode).toBe(0o777);
     });
   });
 });
