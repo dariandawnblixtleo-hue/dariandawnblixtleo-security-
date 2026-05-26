@@ -20,6 +20,13 @@ function normalizeDockerHostPathPrefix(prefix: string): string {
   return withoutTrailingSlash || '/';
 }
 
+function shouldPreserveUnprefixedEtcIdentityFile(hostPath: string, dockerHostPathPrefix: string): boolean {
+  return (
+    (dockerHostPathPrefix === '/tmp' || dockerHostPathPrefix.startsWith('/tmp/')) &&
+    (hostPath === '/etc/passwd' || hostPath === '/etc/group')
+  );
+}
+
 export function translateBindMountHostPath(mount: string, dockerHostPathPrefix: string): string {
   const parts = mount.split(':');
   if (parts.length < 2 || parts.length > 3) {
@@ -42,7 +49,15 @@ export function translateBindMountHostPath(mount: string, dockerHostPathPrefix: 
     return mount;
   }
 
+  if (shouldPreserveUnprefixedEtcIdentityFile(hostPath, dockerHostPathPrefix)) {
+    return mount;
+  }
+
   if (dockerHostPathPrefix === '/') {
+    return mount;
+  }
+
+  if (hostPath === dockerHostPathPrefix || hostPath.startsWith(`${dockerHostPathPrefix}/`)) {
     return mount;
   }
 
