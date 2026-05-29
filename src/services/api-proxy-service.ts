@@ -60,6 +60,9 @@ function buildProviderTargetEnv(config: WrapperConfig): Record<string, string> {
   if (copilotProviderBaseUrl) env.COPILOT_PROVIDER_BASE_URL = copilotProviderBaseUrl;
   if (copilotProviderApiKey) env.COPILOT_PROVIDER_API_KEY = copilotProviderApiKey;
 
+  // Azure OpenAI API version (non-sensitive config)
+  if (config.copilotAzureApiVersion) env.COPILOT_AZURE_API_VERSION = config.copilotAzureApiVersion;
+
   return env;
 }
 

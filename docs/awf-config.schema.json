@@ -124,8 +124,8 @@
               "description": "Anthropic API target override."
             },
             "copilot": {
-              "$ref": "#/$defs/providerHostOnlyTarget",
-              "description": "GitHub Copilot API target override (basePath not supported)."
+              "$ref": "#/$defs/copilotProviderTarget",
+              "description": "GitHub Copilot API target override. Supports Azure OpenAI BYOK via basePath and azureApiVersion."
             },
             "gemini": {
               "$ref": "#/$defs/providerTarget",
@@ -543,6 +543,25 @@
         "authHeader": {
           "type": "string",
           "description": "Override the auth header name used for API requests. For OpenAI, replaces 'Authorization: Bearer <key>' with '<authHeader>: <key>' (raw key, no Bearer prefix). For Anthropic, replaces 'x-api-key'. Not applicable to Copilot or Gemini."
+        }
+      }
+    },
+    "copilotProviderTarget": {
+      "type": "object",
+      "description": "Copilot API provider target override with Azure OpenAI support.",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Override the Copilot API host (e.g., 'my-resource.openai.azure.com' for Azure BYOK)."
+        },
+        "basePath": {
+          "type": "string",
+          "description": "Override the API base path (e.g., '/openai/deployments/gpt-4o' for Azure deployments)."
+        },
+        "azureApiVersion": {
+          "type": "string",
+          "description": "Azure OpenAI API version. Only used when host is an Azure endpoint. Default: '2024-10-21'."
         }
       }
     },

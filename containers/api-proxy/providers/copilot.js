@@ -12,6 +12,10 @@
  * Special routing: GET /models (and /models/*) always uses COPILOT_GITHUB_TOKEN
  * regardless of which auth mode is active, because the /models endpoint only
  * accepts OAuth tokens, not API keys.
+ *
+ * Azure OpenAI BYOK: when the target is *.openai.azure.com, the adapter uses
+ * `api-key:` header (instead of `Authorization: Bearer`) and appends
+ * `api-version` query parameter if not present.
  */
 
 const {
@@ -124,6 +128,24 @@ function deriveCopilotApiTarget(env = process.env) {
   }
   return 'api.githubcopilot.com';
 }
+
+/**
+ * Returns true when the target hostname is an Azure OpenAI endpoint.
+ * Azure OpenAI uses a distinct auth header (`api-key:`) and may need
+ * `api-version` query parameters.
+ *
+ * @param {string} target - Normalized hostname
+ * @returns {boolean}
+ */
+function isAzureOpenAITarget(target) {
+  return (
+    target === 'openai.azure.com' || target.endsWith('.openai.azure.com') ||
+    target === 'cognitiveservices.azure.com' || target.endsWith('.cognitiveservices.azure.com')
+  );
+}
+
+/** Default Azure OpenAI API version used when none is specified */
+const AZURE_DEFAULT_API_VERSION = '2024-10-21';
 
 /**
  * Derive the GitHub REST API target hostname (used for GHES/GHEC endpoints).
@@ -241,6 +263,8 @@ function createCopilotAdapter(env, deps = {}) {
   const integrationId = env.COPILOT_INTEGRATION_ID || 'copilot-developer-cli';
   const rawTarget = deriveCopilotApiTarget(env);
   const basePath = normalizeBasePath(env.COPILOT_API_BASE_PATH);
+  const isAzure = isAzureOpenAITarget(rawTarget);
+  const azureApiVersion = env.COPILOT_AZURE_API_VERSION || AZURE_DEFAULT_API_VERSION;
 
   const bodyTransform = composeBodyTransforms(
     deps.bodyTransform || null,
@@ -373,6 +397,11 @@ function createCopilotAdapter(env, deps = {}) {
         };
       }
 
+      // Azure OpenAI uses `api-key:` header instead of `Authorization: Bearer`
+      if (isAzure) {
+        return { 'api-key': authToken };
+      }
+
       return {
         'Authorization': `Bearer ${authToken}`,
         'Copilot-Integration-Id': integrationId,
@@ -380,6 +409,25 @@ function createCopilotAdapter(env, deps = {}) {
     },
 
     getBodyTransform() { return bodyTransform; },
+
+    /**
+     * For Azure OpenAI targets, inject `api-version` query param if absent.
+     * @param {string} url
+     * @returns {string}
+     */
+    transformRequestUrl(url) {
+      if (!isAzure) return url;
+      try {
+        const parsed = new URL(url, 'http://localhost');
+        if (!parsed.searchParams.has('api-version')) {
+          parsed.searchParams.set('api-version', azureApiVersion);
+        }
+        return parsed.pathname + parsed.search;
+      } catch {
+        return url;
+      }
+    },
+
     ...adapterMethods,
 
     /** Response returned for all requests when no Copilot credentials are configured. */
@@ -420,7 +468,9 @@ module.exports = {
     deriveGitHubApiTarget,
     deriveGitHubApiBasePath,
     isGithubCopilotCatalogTarget,
+    isAzureOpenAITarget,
     COPILOT_PLACEHOLDER_TOKEN,
     COPILOT_DUMMY_BYOK_KEY,
+    AZURE_DEFAULT_API_VERSION,
   },
 };

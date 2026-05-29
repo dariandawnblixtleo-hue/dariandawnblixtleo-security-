@@ -164,6 +164,19 @@ export interface ApiProxyOptions {
   copilotApiBasePath?: string;
 
   /**
+   * Azure OpenAI API version for Copilot BYOK Azure deployments.
+   *
+   * When the Copilot target is an Azure OpenAI endpoint, this version is appended
+   * as a `?api-version=` query parameter to upstream requests.
+   *
+   * - Config: `apiProxy.targets.copilot.azureApiVersion`
+   * - Environment variable: `COPILOT_AZURE_API_VERSION`
+   *
+   * @default '2024-10-21'
+   */
+  copilotAzureApiVersion?: string;
+
+  /**
    * Target hostname for OpenAI API requests (used by API proxy sidecar)
    *
    * When enableApiProxy is true, this hostname is passed to the Node.js sidecar

@@ -128,6 +128,8 @@ the corresponding CLI flag.
 - `apiProxy.targets.openai.authHeader` → `--openai-api-auth-header`
 - `apiProxy.targets.anthropic.basePath` → `--anthropic-api-base-path`
 - `apiProxy.targets.anthropic.authHeader` → `--anthropic-api-auth-header`
+- `apiProxy.targets.copilot.basePath` → `COPILOT_API_BASE_PATH` *(config-only; used for Azure OpenAI deployment path)*
+- `apiProxy.targets.copilot.azureApiVersion` → `COPILOT_AZURE_API_VERSION` *(config-only; default `2024-10-21`)*
 - `apiProxy.targets.gemini.basePath` → `--gemini-api-base-path`
 - `apiProxy.targets.antigravity.basePath` → `--gemini-api-base-path`
 - When both `apiProxy.targets.antigravity` and `apiProxy.targets.gemini` are set, `antigravity` takes precedence per field.
@@ -518,6 +520,39 @@ Default OIDC audience: `https://api.anthropic.com`
 When `security.difcProxy.host` is set, `GITHUB_TOKEN` and `GH_TOKEN` MUST
 be excluded from the agent environment. These tokens SHALL be held
 exclusively by the external DIFC proxy.
+
+### 9.7 Azure OpenAI BYOK Routing
+
+When the Copilot target host is an Azure OpenAI endpoint (`*.openai.azure.com`
+or `*.cognitiveservices.azure.com`), the API proxy adapter applies Azure-specific
+routing:
+
+1. **Auth header**: Uses `api-key: <token>` instead of `Authorization: Bearer <token>`
+2. **API version**: Appends `?api-version=<version>` to upstream requests when absent
+3. **Deployment path**: The `basePath` specifies the Azure deployment path
+   (e.g., `/openai/deployments/gpt-4o`)
+
+**Configuration example:**
+
+```json
+{
+  "apiProxy": {
+    "targets": {
+      "copilot": {
+        "host": "my-resource.openai.azure.com",
+        "basePath": "/openai/deployments/gpt-4o",
+        "azureApiVersion": "2024-10-21"
+      }
+    }
+  }
+}
+```
+
+**Environment variable equivalents:**
+- `COPILOT_API_TARGET=https://my-resource.openai.azure.com`
+- `COPILOT_API_BASE_PATH=/openai/deployments/gpt-4o`
+- `COPILOT_API_KEY=<azure-api-key>` (security-sensitive; use env var, not config)
+- `COPILOT_AZURE_API_VERSION=2024-10-21` (optional; defaults to `2024-10-21`)
 
 ## 10. Effective Token Budget Enforcement
 
