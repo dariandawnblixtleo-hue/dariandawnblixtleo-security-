@@ -90,20 +90,33 @@ if (!HTTPS_PROXY) {
 // and rewritten to a concrete model name before forwarding to upstream.
 const MODEL_ALIASES_RAW = (process.env.AWF_MODEL_ALIASES || '').trim() || undefined;
 const MODEL_ALIASES = parseModelAliases(MODEL_ALIASES_RAW);
-const DEFAULT_MODEL_FALLBACK = Object.freeze({ enabled: true, strategy: 'middle_power' });
+const DEFAULT_MODEL_FALLBACK = Object.freeze({ enabled: true, strategy: 'middle_power', excludeEngines: Object.freeze([]) });
+
+function parseExcludeEngines(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value
+      .filter(engine => typeof engine === 'string')
+      .map(engine => engine.trim().toLowerCase())
+      .filter(Boolean),
+  )];
+}
 
 function parseModelFallbackConfig(rawConfig) {
-  if (!rawConfig) return { ...DEFAULT_MODEL_FALLBACK };
+  if (!rawConfig) return { ...DEFAULT_MODEL_FALLBACK, excludeEngines: [] };
   try {
     const parsed = JSON.parse(rawConfig);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...DEFAULT_MODEL_FALLBACK };
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...DEFAULT_MODEL_FALLBACK, excludeEngines: [] };
+    }
     const enabled = parsed.enabled === undefined ? true : Boolean(parsed.enabled);
     const strategy = typeof parsed.strategy === 'string' && parsed.strategy.trim()
       ? parsed.strategy.trim()
       : DEFAULT_MODEL_FALLBACK.strategy;
-    return { enabled, strategy };
+    const excludeEngines = parseExcludeEngines(parsed.excludeEngines);
+    return { enabled, strategy, excludeEngines };
   } catch {
-    return { ...DEFAULT_MODEL_FALLBACK };
+    return { ...DEFAULT_MODEL_FALLBACK, excludeEngines: [] };
   }
 }
 
@@ -126,6 +139,14 @@ logRequest('info', 'startup', {
 });
 
 function getModelFallbackPolicyForProvider(provider) {
+  // Check excludeEngines first — applies to all providers
+  if (MODEL_FALLBACK.excludeEngines && MODEL_FALLBACK.excludeEngines.includes(provider.toLowerCase())) {
+    return {
+      effective: { ...MODEL_FALLBACK, enabled: false },
+      suppressed: true,
+      suppression_reason: 'excluded_by_config',
+    };
+  }
   if (provider !== 'copilot') {
     return { effective: MODEL_FALLBACK, suppressed: false };
   }

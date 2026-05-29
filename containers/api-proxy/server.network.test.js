@@ -397,12 +397,13 @@ describe('reflectEndpoints', () => {
     expect(result.model_fallback).toEqual({
       enabled: true,
       strategy: 'middle_power',
+      excludeEngines: [],
     });
     expect(result.model_fallback_effective).toEqual({
-      openai: { enabled: true, strategy: 'middle_power', suppressed: false },
-      anthropic: { enabled: true, strategy: 'middle_power', suppressed: false },
-      copilot: { enabled: true, strategy: 'middle_power', suppressed: false },
-      gemini: { enabled: true, strategy: 'middle_power', suppressed: false },
+      openai: { enabled: true, strategy: 'middle_power', excludeEngines: [], suppressed: false },
+      anthropic: { enabled: true, strategy: 'middle_power', excludeEngines: [], suppressed: false },
+      copilot: { enabled: false, strategy: 'middle_power', excludeEngines: [], suppressed: true, suppression_reason: 'copilot_standard_authoritative' },
+      gemini: { enabled: true, strategy: 'middle_power', excludeEngines: [], suppressed: false },
     });
   });
 
@@ -424,10 +425,11 @@ describe('reflectEndpoints', () => {
       });
 
       const reflect = isolatedServer.reflectEndpoints();
-      expect(reflect.model_fallback).toEqual({ enabled: true, strategy: 'middle_power' });
+      expect(reflect.model_fallback).toEqual({ enabled: true, strategy: 'middle_power', excludeEngines: [] });
       expect(reflect.model_fallback_effective.copilot).toEqual({
         enabled: false,
         strategy: 'middle_power',
+        excludeEngines: [],
         suppressed: true,
         suppression_reason: 'copilot_byok_non_githubcopilot_target',
       });
@@ -440,6 +442,81 @@ describe('reflectEndpoints', () => {
       else process.env.COPILOT_PROVIDER_BASE_URL = prevProviderBase;
       if (prevApiKey === undefined) delete process.env.COPILOT_API_KEY;
       else process.env.COPILOT_API_KEY = prevApiKey;
+    }
+  });
+
+  it('should suppress fallback for standard Copilot (no BYOK hints)', () => {
+    const hintVars = [
+      'COPILOT_PROVIDER_TYPE',
+      'COPILOT_PROVIDER_BASE_URL',
+      'COPILOT_PROVIDER_API_KEY',
+      'COPILOT_API_KEY',
+      'COPILOT_API_TARGET',
+    ];
+    const prevValues = Object.fromEntries(hintVars.map(name => [name, process.env[name]]));
+    for (const name of hintVars) delete process.env[name];
+
+    try {
+      let isolatedServer;
+      jest.isolateModules(() => {
+        isolatedServer = require('./server');
+      });
+
+      const result = isolatedServer.reflectEndpoints();
+      expect(result.model_fallback_effective.copilot).toEqual({
+        enabled: false,
+        strategy: 'middle_power',
+        excludeEngines: [],
+        suppressed: true,
+        suppression_reason: 'copilot_standard_authoritative',
+      });
+    } finally {
+      for (const [name, value] of Object.entries(prevValues)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it('should suppress fallback for engines in excludeEngines config', () => {
+    const prevFallback = process.env.AWF_MODEL_FALLBACK;
+    process.env.AWF_MODEL_FALLBACK = JSON.stringify({
+      enabled: true,
+      strategy: 'middle_power',
+      excludeEngines: [' OpenAI ', 'anthropic', 'OPENAI', '   '],
+    });
+
+    try {
+      let isolatedServer;
+      jest.isolateModules(() => {
+        isolatedServer = require('./server');
+      });
+
+      const reflect = isolatedServer.reflectEndpoints();
+      expect(reflect.model_fallback_effective.openai).toEqual({
+        enabled: false,
+        strategy: 'middle_power',
+        excludeEngines: ['openai', 'anthropic'],
+        suppressed: true,
+        suppression_reason: 'excluded_by_config',
+      });
+      expect(reflect.model_fallback_effective.anthropic).toEqual({
+        enabled: false,
+        strategy: 'middle_power',
+        excludeEngines: ['openai', 'anthropic'],
+        suppressed: true,
+        suppression_reason: 'excluded_by_config',
+      });
+      // Gemini not in excludeEngines — should NOT be suppressed
+      expect(reflect.model_fallback_effective.gemini).toEqual({
+        enabled: true,
+        strategy: 'middle_power',
+        excludeEngines: ['openai', 'anthropic'],
+        suppressed: false,
+      });
+    } finally {
+      if (prevFallback === undefined) delete process.env.AWF_MODEL_FALLBACK;
+      else process.env.AWF_MODEL_FALLBACK = prevFallback;
     }
   });
 
