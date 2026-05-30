@@ -168,6 +168,19 @@ describe('mapAwfFileConfigToCliOptions', () => {
     expect(result.modelFallback).toEqual({ enabled: false, strategy: 'middle_power' });
   });
 
+  it('maps modelFallback.excludeEngines field', () => {
+    const result = mapAwfFileConfigToCliOptions({
+      apiProxy: {
+        modelFallback: { enabled: true, strategy: 'middle_power', excludeEngines: ['openai', 'copilot'] },
+      },
+    });
+    expect(result.modelFallback).toEqual({
+      enabled: true,
+      strategy: 'middle_power',
+      excludeEngines: ['openai', 'copilot'],
+    });
+  });
+
   it('leaves maxRuns undefined when not set', () => {
     const result = mapAwfFileConfigToCliOptions({});
     expect(result.maxRuns).toBeUndefined();

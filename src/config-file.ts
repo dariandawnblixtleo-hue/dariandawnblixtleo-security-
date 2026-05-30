@@ -25,6 +25,7 @@ interface AwfFileConfig {
     modelFallback?: {
       enabled?: boolean;
       strategy?: 'middle_power';
+      excludeEngines?: string[];
     };
     targets?: {
       openai?: { host?: string; basePath?: string; authHeader?: string };

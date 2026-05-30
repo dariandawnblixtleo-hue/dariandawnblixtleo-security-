@@ -15,6 +15,7 @@ export interface ApiProxyOptions {
   modelFallback?: {
     enabled?: boolean;
     strategy?: 'middle_power';
+    excludeEngines?: string[];
   };
 
   /**
