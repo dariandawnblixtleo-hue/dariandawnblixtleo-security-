@@ -46,9 +46,8 @@ describe('red-team benchmark workflow config', () => {
     expect(source).toContain('adversarial_dojo');
     expect(source).toContain('ADVERSARIAL_DOJO_REF="f51227612e43d98658679710d5505989e7f53ec7"');
     expect(source).toContain('search-attacks --help');
-    expect(source).toContain("-- '--config'");
-    expect(source).toContain("-- '--agentshim'");
-    expect(source).toContain("-- '--output-dir'");
+    expect(source).toContain("-- '--out'");
+    expect(source).toContain("-- '--victim-provider'");
     expect(source).toContain('Install Claude CLI');
     expect(source).toContain('npm install -g @anthropic-ai/claude-code');
 
@@ -137,7 +136,9 @@ describe('red-team benchmark workflow config', () => {
     expect(lock).toContain('api.anthropic.com');
     expect(lock).toContain('proxy-logs-dir /tmp/gh-aw/agent/awf/firewall-logs');
     expect(lock).toContain('Install Claude CLI');
-    expect(lock).toContain('ADVERSARIAL_DOJO_REF="f51227612e43d98658679710d5505989e7f53ec7"');
+    expect(lock).toContain('ADVERSARIAL_DOJO_REF');
+    expect(lock).toContain('f51227612e43d98658679710d5505989e7f53ec7');
+    expect(lock).toContain('--out');
 
     // Benchmark steps present
     expect(lock).toContain('baseline');
