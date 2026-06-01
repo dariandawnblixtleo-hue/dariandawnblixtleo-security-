@@ -19,10 +19,12 @@ jest.mock('commander', () => {
 import { Command } from 'commander';
 import * as cliModule from './cli';
 import {
+  __resetCopilotApiKeyDeprecationLatchForTesting,
   resolveCopilotApiKey,
   resolveCopilotApiRouting,
 } from './copilot-api-resolver';
 import { copilotApiResolverTestHelpers } from './copilot-api-resolver.test-utils';
+import { logger } from './logger';
 import { redactSecrets } from './redact-secrets';
 
 const { deriveCopilotApiTargetFromProviderBaseUrl, deriveCopilotApiBasePathFromProviderBaseUrl } =
@@ -349,11 +351,20 @@ describe('cli', () => {
   });
 
   describe('Copilot BYOK env resolution', () => {
-    it('prefers COPILOT_API_KEY and falls back to COPILOT_PROVIDER_API_KEY', () => {
+    beforeEach(() => {
+      __resetCopilotApiKeyDeprecationLatchForTesting();
+      jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    });
+
+    it('prefers COPILOT_PROVIDER_API_KEY and ignores legacy COPILOT_API_KEY alone', () => {
       expect(resolveCopilotApiKey({
         COPILOT_API_KEY: 'primary-key',
         COPILOT_PROVIDER_API_KEY: 'fallback-key',
-      })).toBe('primary-key');
+      })).toBe('fallback-key');
+
+      expect(resolveCopilotApiKey({
+        COPILOT_API_KEY: 'legacy-key',
+      })).toBeUndefined();
 
       expect(resolveCopilotApiKey({
         COPILOT_PROVIDER_API_KEY: 'fallback-key',

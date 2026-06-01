@@ -2,15 +2,33 @@ import {
   deriveCopilotApiBasePathFromProviderBaseUrl,
   deriveCopilotApiTargetFromProviderBaseUrl,
 } from './copilot-api-resolver.internal';
+import { logger } from './logger';
+
+let copilotApiKeyDeprecationWarned = false;
+
+export function __resetCopilotApiKeyDeprecationLatchForTesting(): void {
+  copilotApiKeyDeprecationWarned = false;
+}
 
 /**
  * Resolve the Copilot BYOK key from supported environment variables.
- * COPILOT_API_KEY takes precedence over COPILOT_PROVIDER_API_KEY.
+ * COPILOT_PROVIDER_API_KEY is the only supported BYOK key source.
  */
 export function resolveCopilotApiKey(
   env: Record<string, string | undefined> = process.env
 ): string | undefined {
-  return env.COPILOT_API_KEY || env.COPILOT_PROVIDER_API_KEY;
+  if (env.COPILOT_PROVIDER_API_KEY !== undefined) {
+    return env.COPILOT_PROVIDER_API_KEY;
+  }
+
+  if (env.COPILOT_API_KEY !== undefined && !copilotApiKeyDeprecationWarned) {
+    logger.warn(
+      'COPILOT_API_KEY is deprecated for BYOK and will be ignored; use COPILOT_PROVIDER_API_KEY and COPILOT_PROVIDER_BASE_URL instead.'
+    );
+    copilotApiKeyDeprecationWarned = true;
+  }
+
+  return undefined;
 }
 
 /**
