@@ -124,6 +124,7 @@ the corresponding CLI flag.
 - `apiProxy.auth.anthropicOrganizationId` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_ORGANIZATION_ID`)*
 - `apiProxy.auth.anthropicServiceAccountId` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_SERVICE_ACCOUNT_ID`)*
 - `apiProxy.auth.anthropicWorkspaceId` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_WORKSPACE_ID`)*
+- `apiProxy.auth.anthropicTokenUrl` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_TOKEN_URL`)*
 - `apiProxy.targets.<provider>.host` → `--<provider>-api-target` *(except `antigravity.host`, which maps to the Gemini flag below)*
 - `apiProxy.targets.antigravity.host` → `--gemini-api-target`
 - `apiProxy.targets.openai.basePath` → `--openai-api-base-path`
@@ -499,7 +500,8 @@ principal has direct access grants on the target resource.
 #### 9.5.4 Anthropic Provider (`provider: anthropic`)
 
 Exchanges the GitHub OIDC JWT for an Anthropic Workload Identity Federation
-token via `https://api.anthropic.com/v1/oauth/token`. The sidecar injects
+token via Anthropic OAuth token endpoint (default:
+`https://api.anthropic.com/v1/oauth/token`). The sidecar injects
 the resulting token as an `Authorization` header on upstream requests.
 
 | Config path | Environment variable | Required | Default |
@@ -508,10 +510,13 @@ the resulting token as an `Authorization` header on upstream requests.
 | `apiProxy.auth.anthropicOrganizationId` | `AWF_AUTH_ANTHROPIC_ORGANIZATION_ID` | ✅ | — |
 | `apiProxy.auth.anthropicServiceAccountId` | `AWF_AUTH_ANTHROPIC_SERVICE_ACCOUNT_ID` | ✅ | — |
 | `apiProxy.auth.anthropicWorkspaceId` | `AWF_AUTH_ANTHROPIC_WORKSPACE_ID` | Conditional¹ | — |
+| `apiProxy.auth.anthropicTokenUrl` | `AWF_AUTH_ANTHROPIC_TOKEN_URL` | ❌ | `https://api.anthropic.com/v1/oauth/token` |
 
 ¹ `AWF_AUTH_ANTHROPIC_WORKSPACE_ID` is required when the federation rule covers
 multiple workspaces. When the rule is scoped to a single workspace, it may be
 omitted.
+
+`anthropicTokenUrl` is non-sensitive and SHOULD be supplied via AWF config (including stdin config via `--config -`); env var support exists for compatibility.
 
 Default OIDC audience: `https://api.anthropic.com`
 
