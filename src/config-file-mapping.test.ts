@@ -37,7 +37,7 @@ describe('mapAwfFileConfigToCliOptions', () => {
       apiProxy: {
         targets: {
           openai: { host: 'api.openai.com', basePath: '/v1' },
-          copilot: { host: 'api.githubcopilot.com' },
+          copilot: { host: 'my-resource.openai.azure.com', basePath: '/openai/deployments/gpt-4o', azureApiVersion: '2025-03-01' },
           gemini: { host: 'generativelanguage.googleapis.com', basePath: '/v1beta' },
         },
       },
@@ -45,7 +45,9 @@ describe('mapAwfFileConfigToCliOptions', () => {
 
     expect(result.openaiApiTarget).toBe('api.openai.com');
     expect(result.openaiApiBasePath).toBe('/v1');
-    expect(result.copilotApiTarget).toBe('api.githubcopilot.com');
+    expect(result.copilotApiTarget).toBe('my-resource.openai.azure.com');
+    expect(result.copilotApiBasePath).toBe('/openai/deployments/gpt-4o');
+    expect(result.copilotAzureApiVersion).toBe('2025-03-01');
     expect(result.geminiApiTarget).toBe('generativelanguage.googleapis.com');
     expect(result.geminiApiBasePath).toBe('/v1beta');
   });

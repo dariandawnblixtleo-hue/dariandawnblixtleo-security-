@@ -21,12 +21,12 @@ describe('validateAwfFileConfig', () => {
     expect(errors).toContain('config.network.allowDomains must be an array of strings');
   });
 
-  it('rejects unsupported copilot basePath', () => {
+  it('accepts copilot basePath and azureApiVersion for Azure BYOK', () => {
     const errors = validateAwfFileConfig({
-      apiProxy: { targets: { copilot: { host: 'api.githubcopilot.com', basePath: '/v1' } } },
+      apiProxy: { targets: { copilot: { host: 'my-resource.openai.azure.com', basePath: '/openai/deployments/gpt-4o', azureApiVersion: '2025-03-01' } } },
     });
 
-    expect(errors).toContain('config.apiProxy.targets.copilot.basePath is not supported');
+    expect(errors).toHaveLength(0);
   });
 
   it('rejects non-object config root', () => {

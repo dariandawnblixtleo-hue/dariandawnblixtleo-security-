@@ -30,7 +30,7 @@ interface AwfFileConfig {
     targets?: {
       openai?: { host?: string; basePath?: string; authHeader?: string };
       anthropic?: { host?: string; basePath?: string; authHeader?: string };
-      copilot?: { host?: string; basePath?: string };
+      copilot?: { host?: string; basePath?: string; azureApiVersion?: string };
       gemini?: { host?: string; basePath?: string };
       antigravity?: { host?: string; basePath?: string };
     };
@@ -192,6 +192,8 @@ export function mapAwfFileConfigToCliOptions(config: AwfFileConfig): Record<stri
     anthropicApiBasePath: config.apiProxy?.targets?.anthropic?.basePath,
     anthropicApiAuthHeader: config.apiProxy?.targets?.anthropic?.authHeader,
     copilotApiTarget: config.apiProxy?.targets?.copilot?.host,
+    copilotApiBasePath: config.apiProxy?.targets?.copilot?.basePath,
+    copilotAzureApiVersion: config.apiProxy?.targets?.copilot?.azureApiVersion,
     geminiApiTarget: antigravityTargetConfig?.host ?? geminiTargetConfig?.host,
     geminiApiBasePath: antigravityTargetConfig?.basePath ?? geminiTargetConfig?.basePath,
     modelAliases: config.apiProxy?.models,

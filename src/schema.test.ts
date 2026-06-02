@@ -180,8 +180,13 @@ describe('awf-config.schema.json', () => {
     expect(validate({ rateLimiting: { bytesPerMinute: -5 } })).toBe(false);
   });
 
-  it('rejects copilot basePath (not supported)', () => {
-    expect(validate({ apiProxy: { targets: { copilot: { host: 'api.githubcopilot.com', basePath: '/v1' } } } })).toBe(false);
+  it('accepts copilot basePath and azureApiVersion', () => {
+    expect(validate({ apiProxy: { targets: { copilot: { host: 'my-resource.openai.azure.com', basePath: '/openai/deployments/gpt-4o' } } } })).toBe(true);
+    expect(validate({ apiProxy: { targets: { copilot: { host: 'my-resource.openai.azure.com', basePath: '/openai/deployments/gpt-4o', azureApiVersion: '2025-03-01' } } } })).toBe(true);
+  });
+
+  it('rejects copilot unknown properties', () => {
+    expect(validate({ apiProxy: { targets: { copilot: { host: 'api.githubcopilot.com', unknownProp: true } } } })).toBe(false);
   });
 
   it('accepts allowHostPorts as string or array of strings', () => {
