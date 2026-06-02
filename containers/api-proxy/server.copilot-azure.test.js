@@ -1,7 +1,7 @@
 /**
  * Tests for Copilot Azure OpenAI BYOK routing.
  *
- * Covers: isAzureOpenAITarget detection and api-key header injection.
+ * Covers: isAzureOpenAITarget detection and Authorization header behavior.
  */
 
 const {
@@ -42,19 +42,22 @@ describe('Azure OpenAI BYOK adapter', () => {
   };
 
   describe('getAuthHeaders', () => {
-    it('uses api-key header for Azure targets', () => {
+    it('uses Authorization header for Azure targets', () => {
       const adapter = createCopilotAdapter(azureEnv);
       const req = { url: '/chat/completions', method: 'POST', headers: {} };
       const headers = adapter.getAuthHeaders(req);
-      expect(headers).toEqual({ 'api-key': 'my-azure-api-key' });
+      expect(headers).toEqual({
+        'Authorization': 'Bearer ' + 'my-azure-api-key',
+        'Copilot-Integration-Id': 'copilot-developer-cli',
+      });
     });
 
-    it('does not include Copilot-Integration-Id for Azure targets', () => {
+    it('includes Copilot-Integration-Id for Azure targets', () => {
       const adapter = createCopilotAdapter(azureEnv);
       const req = { url: '/chat/completions', method: 'POST', headers: {} };
       const headers = adapter.getAuthHeaders(req);
-      expect(headers['Copilot-Integration-Id']).toBeUndefined();
-      expect(headers['Authorization']).toBeUndefined();
+      expect(headers['Copilot-Integration-Id']).toBe('copilot-developer-cli');
+      expect(headers['Authorization']).toBe('Bearer ' + 'my-azure-api-key');
     });
 
     it('still uses Bearer auth for non-Azure targets', () => {
@@ -76,7 +79,7 @@ describe('Azure OpenAI BYOK adapter', () => {
   });
 
   describe('cognitiveservices.azure.com target', () => {
-    it('also uses api-key header', () => {
+    it('also uses Authorization header', () => {
       const adapter = createCopilotAdapter({
         COPILOT_API_KEY: 'cog-key',
         COPILOT_API_TARGET: 'https://my-resource.cognitiveservices.azure.com',
@@ -84,7 +87,10 @@ describe('Azure OpenAI BYOK adapter', () => {
       });
       const req = { url: '/chat/completions', method: 'POST', headers: {} };
       const headers = adapter.getAuthHeaders(req);
-      expect(headers).toEqual({ 'api-key': 'cog-key' });
+      expect(headers).toEqual({
+        'Authorization': 'Bearer ' + 'cog-key',
+        'Copilot-Integration-Id': 'copilot-developer-cli',
+      });
     });
   });
 });

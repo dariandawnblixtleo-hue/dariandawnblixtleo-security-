@@ -13,8 +13,7 @@
  * regardless of which auth mode is active, because the /models endpoint only
  * accepts OAuth tokens, not API keys.
  *
- * Azure OpenAI BYOK: when the target is *.openai.azure.com, the adapter uses
- * `api-key:` header (instead of `Authorization: Bearer`).
+ * Azure OpenAI BYOK: targets like *.openai.azure.com are supported.
  */
 
 const {
@@ -130,7 +129,6 @@ function deriveCopilotApiTarget(env = process.env) {
 
 /**
  * Returns true when the target hostname is an Azure OpenAI endpoint.
- * Azure OpenAI uses a distinct auth header (`api-key:`).
  *
  * @param {string} target - Normalized hostname
  * @returns {boolean}
@@ -258,7 +256,6 @@ function createCopilotAdapter(env, deps = {}) {
   const integrationId = env.COPILOT_INTEGRATION_ID || 'copilot-developer-cli';
   const rawTarget = deriveCopilotApiTarget(env);
   const basePath = normalizeBasePath(env.COPILOT_API_BASE_PATH);
-  const isAzure = isAzureOpenAITarget(rawTarget);
 
   const bodyTransform = composeBodyTransforms(
     deps.bodyTransform || null,
@@ -389,11 +386,6 @@ function createCopilotAdapter(env, deps = {}) {
           'Authorization': `Bearer ${githubToken}`,
           'Copilot-Integration-Id': integrationId,
         };
-      }
-
-      // Azure OpenAI uses `api-key:` header instead of `Authorization: Bearer`
-      if (isAzure) {
-        return { 'api-key': authToken };
       }
 
       return {
