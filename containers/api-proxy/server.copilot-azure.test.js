@@ -1,15 +1,13 @@
 /**
  * Tests for Copilot Azure OpenAI BYOK routing.
  *
- * Covers: isAzureOpenAITarget detection, api-key header injection,
- * and api-version query parameter injection via transformRequestUrl.
+ * Covers: isAzureOpenAITarget detection and api-key header injection.
  */
 
 const {
   createCopilotAdapter,
   _testing: {
     isAzureOpenAITarget,
-    AZURE_DEFAULT_API_VERSION,
   },
 } = require('./providers/copilot');
 
@@ -71,41 +69,9 @@ describe('Azure OpenAI BYOK adapter', () => {
   });
 
   describe('transformRequestUrl', () => {
-    it('appends api-version when absent for Azure targets', () => {
+    it('does not define a URL transform for Azure targets', () => {
       const adapter = createCopilotAdapter(azureEnv);
-      const result = adapter.transformRequestUrl('/chat/completions');
-      expect(result).toBe(`/chat/completions?api-version=${AZURE_DEFAULT_API_VERSION}`);
-    });
-
-    it('preserves existing api-version parameter', () => {
-      const adapter = createCopilotAdapter(azureEnv);
-      const result = adapter.transformRequestUrl('/chat/completions?api-version=2025-01-01');
-      expect(result).toBe('/chat/completions?api-version=2025-01-01');
-    });
-
-    it('preserves other query parameters', () => {
-      const adapter = createCopilotAdapter(azureEnv);
-      const result = adapter.transformRequestUrl('/chat/completions?stream=true');
-      expect(result).toContain('stream=true');
-      expect(result).toContain(`api-version=${AZURE_DEFAULT_API_VERSION}`);
-    });
-
-    it('respects COPILOT_AZURE_API_VERSION override', () => {
-      const adapter = createCopilotAdapter({
-        ...azureEnv,
-        COPILOT_AZURE_API_VERSION: '2025-03-01',
-      });
-      const result = adapter.transformRequestUrl('/chat/completions');
-      expect(result).toBe('/chat/completions?api-version=2025-03-01');
-    });
-
-    it('is a no-op for non-Azure targets', () => {
-      const adapter = createCopilotAdapter({
-        COPILOT_API_KEY: 'my-key',
-        COPILOT_API_TARGET: 'https://api.githubcopilot.com',
-      });
-      const result = adapter.transformRequestUrl('/v1/chat/completions');
-      expect(result).toBe('/v1/chat/completions');
+      expect(adapter.transformRequestUrl).toBeUndefined();
     });
   });
 
