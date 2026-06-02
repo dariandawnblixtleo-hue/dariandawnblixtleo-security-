@@ -434,20 +434,20 @@ describe('API proxy sidecar: env var forwarding', () => {
         expect(env.COPILOT_PROVIDER_WIRE_API).toBe('responses');
       });
 
-      it('should not set COPILOT_OFFLINE when only copilotGithubToken is provided', () => {
+      it('should set COPILOT_OFFLINE=true when only copilotGithubToken is provided (sidecar auth needs offline+BYOK mode)', () => {
         const configWithProxy = { ...mockConfig, enableApiProxy: true, copilotGithubToken: 'ghu_test_token' };
         const result = generateDockerCompose(configWithProxy, mockNetworkConfigWithProxy);
         const agent = result.services.agent;
         const env = agent.environment as Record<string, string>;
-        expect(env.COPILOT_OFFLINE).toBeUndefined();
+        expect(env.COPILOT_OFFLINE).toBe('true');
       });
 
-      it('should not set COPILOT_PROVIDER_BASE_URL when only copilotGithubToken is provided', () => {
+      it('should set COPILOT_PROVIDER_BASE_URL when only copilotGithubToken is provided (sidecar auth needs offline+BYOK mode)', () => {
         const configWithProxy = { ...mockConfig, enableApiProxy: true, copilotGithubToken: 'ghu_test_token' };
         const result = generateDockerCompose(configWithProxy, mockNetworkConfigWithProxy);
         const agent = result.services.agent;
         const env = agent.environment as Record<string, string>;
-        expect(env.COPILOT_PROVIDER_BASE_URL).toBeUndefined();
+        expect(env.COPILOT_PROVIDER_BASE_URL).toBe('http://172.30.0.30:10002');
       });
 
       it('should pass COPILOT_PROVIDER_TYPE/BASE_URL/API_KEY from additionalEnv to api-proxy', () => {

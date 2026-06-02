@@ -40,4 +40,11 @@ export function buildToolEnvironment(params: ToolEnvironmentParams): void {
     environment.COPILOT_PROVIDER_API_KEY = COPILOT_PLACEHOLDER_TOKEN;
     logger.debug('COPILOT_PROVIDER_API_KEY set to placeholder value (early) to prevent --env-all override');
   }
+
+  if (config.enableApiProxy && !config.copilotApiKey && config.copilotGithubToken) {
+    // In copilotGithubToken-only mode, the CLI still needs offline+BYOK to avoid OAuth handshake.
+    // Set COPILOT_PROVIDER_API_KEY placeholder early so --env-all doesn't override it.
+    environment.COPILOT_PROVIDER_API_KEY = COPILOT_PLACEHOLDER_TOKEN;
+    logger.debug('COPILOT_PROVIDER_API_KEY set to placeholder value (early, copilotGithubToken path) to prevent --env-all override');
+  }
 }

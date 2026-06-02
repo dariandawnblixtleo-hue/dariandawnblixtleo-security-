@@ -337,9 +337,14 @@ export function buildApiProxyService(params: ApiProxyServiceParams): ApiProxyBui
       logger.debug(`COPILOT_PROVIDER_WIRE_API set to responses for model: ${copilotModel}`);
     }
   }
-  if (config.copilotApiKey) {
+  if (config.copilotApiKey || config.copilotGithubToken) {
     // Enable Copilot CLI offline + BYOK mode so it skips the GitHub OAuth handshake
     // and talks directly to the sidecar without needing GitHub authentication for inference.
+    // This applies to BOTH auth paths:
+    //   - copilotApiKey (true BYOK): user provides their own upstream key
+    //   - copilotGithubToken (sidecar auth): gh-aw injects a dummy COPILOT_API_KEY sentinel
+    //     to start the CLI, and real auth is handled by the sidecar. The CLI still needs
+    //     offline+BYOK mode to avoid MCP policy enforcement and OAuth handshake.
     // Reference: https://github.blog/changelog/2026-04-07-copilot-cli-now-supports-byok-and-local-models/
     agentEnvAdditions.COPILOT_OFFLINE = 'true';
     logger.debug('COPILOT_OFFLINE set to true for offline+BYOK mode');
