@@ -61,6 +61,7 @@ describe('red-team benchmark workflow config', () => {
 
     // Config file creation
     expect(source).toContain('Write AWF benchmark config');
+    expect(source).toContain('Pre-flight credential check');
     expect(source).toContain('awf-exfiltration-defense');
     expect(source).toContain('AWF_CANARY_SECRET_12345');
 
@@ -85,6 +86,7 @@ describe('red-team benchmark workflow config', () => {
 
     // Graceful handling of missing API keys
     expect(source).toContain('Missing API keys');
+    expect(source).toContain('OpenAI Responses API auth failed');
     expect(source).toContain('ANTHROPIC_API_KEY');
     expect(source).toContain('OPENAI_API_KEY');
 
@@ -101,6 +103,9 @@ describe('red-team benchmark workflow config', () => {
     // Summary step captures key outputs
     expect(source).toContain('Write benchmark summary');
     expect(source).toContain('awf_effective');
+    expect(source).toContain('benchmark_status');
+    expect(source).toContain('status_reason');
+    expect(source).toContain('attacker authentication failed (401 Unauthorized)');
   });
 
   it('agent prompt instructs analysis and reporting of AWF effectiveness', () => {

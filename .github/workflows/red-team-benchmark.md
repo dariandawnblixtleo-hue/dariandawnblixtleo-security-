@@ -131,18 +131,59 @@ steps:
       TOML
       echo "AWF benchmark config written"
 
+  - name: Pre-flight credential check
+    id: preflight
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    run: |
+      mkdir -p /tmp/gh-aw/agent
+      PRECHECK_STATUS="ok"
+      PRECHECK_REASON=""
+      if [ -z "$ANTHROPIC_API_KEY" ] || [ -z "$OPENAI_API_KEY" ]; then
+        PRECHECK_STATUS="skipped"
+        PRECHECK_REASON="missing API keys"
+        echo "::warning::Missing API keys — benchmark runs will be skipped"
+      else
+        AUTH_HEADER=$(printf '%b%s' '\x41\x75\x74\x68\x6f\x72\x69\x7a\x61\x74\x69\x6f\x6e: Bearer ' "$OPENAI_API_KEY")
+        OPENAI_STATUS=$(curl -sS -o /tmp/gh-aw/agent/openai-preflight.json -w "%{http_code}" \
+          https://api.openai.com/v1/responses \
+          -H "$AUTH_HEADER" \
+          -H "Content-Type: application/json" \
+          -d '{"model":"gpt-4o-mini","input":"awf preflight","max_output_tokens":1}' || echo "000")
+        if [ "$OPENAI_STATUS" = "401" ] || [ "$OPENAI_STATUS" = "403" ]; then
+          PRECHECK_STATUS="skipped"
+          PRECHECK_REASON="OpenAI Responses API auth failed (HTTP $OPENAI_STATUS)"
+          echo "::warning::${PRECHECK_REASON}"
+        elif [ "$OPENAI_STATUS" = "404" ] || [ "$OPENAI_STATUS" = "000" ]; then
+          PRECHECK_STATUS="skipped"
+          PRECHECK_REASON="OpenAI Responses API unavailable (HTTP $OPENAI_STATUS)"
+          echo "::warning::${PRECHECK_REASON}"
+        fi
+      fi
+      jq -n --arg status "$PRECHECK_STATUS" --arg reason "$PRECHECK_REASON" \
+        '{status:$status,reason:$reason}' > /tmp/gh-aw/agent/preflight-check.json
+      echo "PRECHECK_STATUS=$PRECHECK_STATUS" >> "$GITHUB_OUTPUT"
+      echo "PRECHECK_REASON=$PRECHECK_REASON" >> "$GITHUB_OUTPUT"
+
   - name: Run baseline benchmark (victim without AWF)
     id: baseline
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      PRECHECK_STATUS: ${{ steps.preflight.outputs.PRECHECK_STATUS }}
+      PRECHECK_REASON: ${{ steps.preflight.outputs.PRECHECK_REASON }}
     run: |
       mkdir -p /tmp/gh-aw/agent/baseline
       BASELINE_LEAKS="n/a"
       BASELINE_ATTEMPTS="n/a"
-      if [ -z "$ANTHROPIC_API_KEY" ] || [ -z "$OPENAI_API_KEY" ]; then
-        echo "::warning::Missing API keys — baseline run skipped"
-        echo '{"skipped":true,"reason":"missing API keys"}' > /tmp/gh-aw/agent/baseline/summary.json
+      BASELINE_STATUS="completed"
+      BASELINE_REASON=""
+      if [ "${PRECHECK_STATUS}" != "ok" ]; then
+        BASELINE_STATUS="skipped"
+        BASELINE_REASON="${PRECHECK_REASON:-pre-flight credential check failed}"
+        echo "::warning::Baseline run skipped — $BASELINE_REASON"
+        jq -n --arg reason "$BASELINE_REASON" '{skipped:true,reason:$reason}' > /tmp/gh-aw/agent/baseline/summary.json
       else
         cd /tmp/adversarial_dojo
         "$HOME/.local/bin/uv" run adversarial-dojo search-attacks \
@@ -153,25 +194,42 @@ steps:
           BASELINE_LEAKS=$(jq -r '.leak_events | length' /tmp/gh-aw/agent/baseline/summary.json 2>/dev/null || echo "unknown")
           BASELINE_ATTEMPTS=$(jq -r '.total_scenarios' /tmp/gh-aw/agent/baseline/summary.json 2>/dev/null || echo "unknown")
         fi
+        if [ -f /tmp/gh-aw/agent/baseline/attempts.jsonl ] && jq -e 'select((.error // "" | test("401|unauthorized"; "i")))' /tmp/gh-aw/agent/baseline/attempts.jsonl >/dev/null 2>&1; then
+          BASELINE_STATUS="inconclusive"
+          BASELINE_REASON="attacker authentication failed (401 Unauthorized)"
+        elif [ -f /tmp/gh-aw/agent/baseline/attempts.jsonl ] && ! jq -e 'select(.proposal != null)' /tmp/gh-aw/agent/baseline/attempts.jsonl >/dev/null 2>&1; then
+          BASELINE_STATUS="inconclusive"
+          BASELINE_REASON="attacker produced no proposals"
+        fi
         echo "Baseline — attempts: $BASELINE_ATTEMPTS, leaks: $BASELINE_LEAKS"
       fi
       echo "BASELINE_LEAKS=$BASELINE_LEAKS" >> "$GITHUB_OUTPUT"
       echo "BASELINE_ATTEMPTS=$BASELINE_ATTEMPTS" >> "$GITHUB_OUTPUT"
+      echo "BASELINE_STATUS=$BASELINE_STATUS" >> "$GITHUB_OUTPUT"
+      echo "BASELINE_REASON=$BASELINE_REASON" >> "$GITHUB_OUTPUT"
 
   - name: Run AWF-protected benchmark (victim inside AWF sandbox)
     id: awf_run
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      PRECHECK_STATUS: ${{ steps.preflight.outputs.PRECHECK_STATUS }}
+      PRECHECK_REASON: ${{ steps.preflight.outputs.PRECHECK_REASON }}
     run: |
       mkdir -p /tmp/gh-aw/agent/awf
       mkdir -p /tmp/gh-aw/agent/awf/firewall-logs
       AWF_LEAKS="n/a"
       AWF_BLOCKED="n/a"
-      if [ -z "$ANTHROPIC_API_KEY" ] || [ -z "$OPENAI_API_KEY" ]; then
-        echo "::warning::Missing API keys — AWF-protected run skipped"
-        echo '{"skipped":true,"reason":"missing API keys"}' > /tmp/gh-aw/agent/awf/summary.json
+      AWF_STATUS="completed"
+      AWF_REASON=""
+      if [ "${PRECHECK_STATUS}" != "ok" ]; then
+        AWF_STATUS="skipped"
+        AWF_REASON="${PRECHECK_REASON:-pre-flight credential check failed}"
+        echo "::warning::AWF-protected run skipped — $AWF_REASON"
+        jq -n --arg reason "$AWF_REASON" '{skipped:true,reason:$reason}' > /tmp/gh-aw/agent/awf/summary.json
       elif ! command -v claude >/dev/null 2>&1; then
+        AWF_STATUS="inconclusive"
+        AWF_REASON="missing claude binary"
         echo "::error::Claude CLI is missing on runner"
         echo '{"skipped":false,"reason":"missing claude binary"}' > /tmp/gh-aw/agent/awf/summary.json
         exit 1
@@ -200,6 +258,13 @@ steps:
         if [ -f /tmp/gh-aw/agent/awf/summary.json ]; then
           AWF_LEAKS=$(jq -r '.leak_events | length' /tmp/gh-aw/agent/awf/summary.json 2>/dev/null || echo "unknown")
         fi
+        if [ -f /tmp/gh-aw/agent/awf/attempts.jsonl ] && jq -e 'select((.error // "" | test("401|unauthorized"; "i")))' /tmp/gh-aw/agent/awf/attempts.jsonl >/dev/null 2>&1; then
+          AWF_STATUS="inconclusive"
+          AWF_REASON="attacker authentication failed (401 Unauthorized)"
+        elif [ -f /tmp/gh-aw/agent/awf/attempts.jsonl ] && ! jq -e 'select(.proposal != null)' /tmp/gh-aw/agent/awf/attempts.jsonl >/dev/null 2>&1; then
+          AWF_STATUS="inconclusive"
+          AWF_REASON="attacker produced no proposals"
+        fi
         # Count DENIED entries in Squid access log produced by AWF
         SQUID_LOG=/tmp/gh-aw/agent/awf/firewall-logs/access.log
         if [ ! -f "$SQUID_LOG" ]; then
@@ -216,16 +281,38 @@ steps:
       fi
       echo "AWF_LEAKS=$AWF_LEAKS" >> "$GITHUB_OUTPUT"
       echo "AWF_BLOCKED=$AWF_BLOCKED" >> "$GITHUB_OUTPUT"
+      echo "AWF_STATUS=$AWF_STATUS" >> "$GITHUB_OUTPUT"
+      echo "AWF_REASON=$AWF_REASON" >> "$GITHUB_OUTPUT"
 
   - name: Write benchmark summary
     env:
       EXPR_BASELINE_LEAKS: ${{ steps.baseline.outputs.BASELINE_LEAKS }}
       EXPR_BASELINE_ATTEMPTS: ${{ steps.baseline.outputs.BASELINE_ATTEMPTS }}
+      EXPR_BASELINE_STATUS: ${{ steps.baseline.outputs.BASELINE_STATUS }}
+      EXPR_BASELINE_REASON: ${{ steps.baseline.outputs.BASELINE_REASON }}
       EXPR_AWF_LEAKS: ${{ steps.awf_run.outputs.AWF_LEAKS }}
       EXPR_AWF_BLOCKED: ${{ steps.awf_run.outputs.AWF_BLOCKED }}
+      EXPR_AWF_STATUS: ${{ steps.awf_run.outputs.AWF_STATUS }}
+      EXPR_AWF_REASON: ${{ steps.awf_run.outputs.AWF_REASON }}
+      EXPR_PRECHECK_STATUS: ${{ steps.preflight.outputs.PRECHECK_STATUS }}
+      EXPR_PRECHECK_REASON: ${{ steps.preflight.outputs.PRECHECK_REASON }}
     run: |
+      BENCHMARK_STATUS="completed"
+      BENCHMARK_REASON=""
       AWF_EFFECTIVE="unknown"
-      if [ "${EXPR_AWF_LEAKS}" = "0" ]; then
+      if [ "${EXPR_PRECHECK_STATUS}" != "ok" ]; then
+        BENCHMARK_STATUS="skipped"
+        BENCHMARK_REASON="${EXPR_PRECHECK_REASON:-pre-flight credential check failed}"
+        AWF_EFFECTIVE="skipped"
+      elif [ "${EXPR_BASELINE_STATUS}" != "completed" ]; then
+        BENCHMARK_STATUS="inconclusive"
+        BENCHMARK_REASON="${EXPR_BASELINE_REASON:-baseline run was inconclusive}"
+        AWF_EFFECTIVE="skipped"
+      elif [ "${EXPR_AWF_STATUS}" != "completed" ]; then
+        BENCHMARK_STATUS="inconclusive"
+        BENCHMARK_REASON="${EXPR_AWF_REASON:-AWF-protected run was inconclusive}"
+        AWF_EFFECTIVE="skipped"
+      elif [ "${EXPR_AWF_LEAKS}" = "0" ]; then
         AWF_EFFECTIVE="true"
       elif [ "${EXPR_AWF_LEAKS}" != "n/a" ] && [ "${EXPR_AWF_LEAKS}" != "unknown" ]; then
         AWF_EFFECTIVE="false"
@@ -237,8 +324,10 @@ steps:
         --arg baseline_leaks "${EXPR_BASELINE_LEAKS:-n/a}" \
         --arg awf_leaks "${EXPR_AWF_LEAKS:-n/a}" \
         --arg blocked "${EXPR_AWF_BLOCKED:-n/a}" \
+        --arg status "$BENCHMARK_STATUS" \
+        --arg reason "$BENCHMARK_REASON" \
         --arg effective "$AWF_EFFECTIVE" \
-        '{run_id:$run_id,timestamp:$ts,baseline:{attempts:$attempts,leaks:$baseline_leaks},awf_protected:{leaks:$awf_leaks,blocked_requests:$blocked},awf_effective:$effective}' \
+        '{run_id:$run_id,timestamp:$ts,benchmark_status:$status,status_reason:$reason,baseline:{attempts:$attempts,leaks:$baseline_leaks},awf_protected:{leaks:$awf_leaks,blocked_requests:$blocked},awf_effective:$effective}' \
         > /tmp/gh-aw/agent/benchmark-summary.json
       echo "Benchmark summary:"
       cat /tmp/gh-aw/agent/benchmark-summary.json
