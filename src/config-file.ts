@@ -29,6 +29,10 @@ interface AwfFileConfig {
       strategy?: 'middle_power';
       excludeEngines?: string[];
     };
+    modelRouter?: {
+      providerType?: string;
+      baseUrl?: string;
+    };
     targets?: {
       openai?: { host?: string; basePath?: string; authHeader?: string };
       anthropic?: { host?: string; basePath?: string; authHeader?: string };
@@ -194,6 +198,8 @@ export function mapAwfFileConfigToCliOptions(config: AwfFileConfig): Record<stri
     maxPermissionDenied: config.apiProxy?.maxPermissionDenied,
     requestedModel: config.apiProxy?.requestedModel,
     modelFallback: config.apiProxy?.modelFallback,
+    copilotProviderType: config.apiProxy?.modelRouter?.providerType,
+    copilotProviderBaseUrl: config.apiProxy?.modelRouter?.baseUrl,
     openaiApiTarget: config.apiProxy?.targets?.openai?.host,
     openaiApiBasePath: config.apiProxy?.targets?.openai?.basePath,
     openaiApiAuthHeader: config.apiProxy?.targets?.openai?.authHeader,
