@@ -114,10 +114,12 @@ function createCopilotAdapter(env, deps = {}) {
   }
   const oidcConfigured = !!(oidcProvider || awsOidcProvider);
 
-  // authToken is consumed by the existing validation/models-fetch/auth-header paths.
-  // For OIDC mode the token isn't available synchronously at construction time, so
-  // we surface a non-empty marker here to keep alwaysBind/isEnabled probes happy and
-  // resolve the real token lazily inside getAuthHeaders.
+  // authToken is the static auth token (COPILOT_PROVIDER_API_KEY or COPILOT_GITHUB_TOKEN)
+  // consumed by the existing validation/models-fetch/auth-header paths. It is
+  // intentionally left undefined in OIDC mode — the real token isn't available
+  // synchronously at construction time and is resolved lazily inside getAuthHeaders.
+  // OIDC enablement is driven by `oidcConfigured` / `isEnabled()` (which checks
+  // `oidcProvider?.isReady()` / `awsOidcProvider?.isReady()`), not by `authToken`.
   const authToken = staticAuthToken;
   // Extra headers to inject on all requests that use the BYOK API key.
   // Only populated when AWF_BYOK_EXTRA_HEADERS is set; ignored for standard

@@ -791,3 +791,204 @@ describe('createCopilotAdapter — Azure OIDC (Entra) getAuthHeaders', () => {
     expect(headers['Authorization']).toBe(['Bearer', 'sk-or-v1-abc123'].join(' '));
   });
 });
+
+describe('createCopilotAdapter — AWS OIDC (Bedrock) wiring', () => {
+  const fakeReq = { url: '/v1/chat/completions', method: 'POST', headers: {} };
+
+  it('exposes an AWS OIDC provider when AWF_AUTH_TYPE=github-oidc + AWF_AUTH_PROVIDER=aws', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'aws',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_AWS_ROLE_ARN: 'arn:aws:iam::123456789012:role/test-role',
+      AWF_AUTH_AWS_REGION: 'us-east-1',
+      COPILOT_PROVIDER_BASE_URL: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    });
+
+    const provider = adapter.getAwsOidcProvider();
+    expect(provider).toBeTruthy();
+    expect(adapter.getOidcProvider()).toBeNull();
+    provider.shutdown();
+  });
+
+  it('returns empty headers in AWS OIDC mode (SigV4 signing is applied at the request layer)', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'aws',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_AWS_ROLE_ARN: 'arn:aws:iam::123456789012:role/test-role',
+      AWF_AUTH_AWS_REGION: 'us-east-1',
+      COPILOT_PROVIDER_BASE_URL: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    });
+
+    expect(adapter.getAuthHeaders(fakeReq)).toEqual({});
+    adapter.getAwsOidcProvider().shutdown();
+  });
+
+  it('isEnabled returns false until AWS OIDC provider is ready', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'aws',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_AWS_ROLE_ARN: 'arn:aws:iam::123456789012:role/test-role',
+      AWF_AUTH_AWS_REGION: 'us-east-1',
+      COPILOT_PROVIDER_BASE_URL: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    });
+    expect(adapter.isEnabled()).toBe(false);
+
+    const provider = adapter.getAwsOidcProvider();
+    provider._cachedCredentials = {
+      accessKeyId: 'AKIATEST',
+      secretAccessKey: 'secret',
+      sessionToken: 'session',
+    };
+    provider._expiresAt = Math.floor(Date.now() / 1000) + 600;
+    expect(adapter.isEnabled()).toBe(true);
+
+    provider.shutdown();
+  });
+
+  it('unconfigured-response surfaces the OIDC-specific error message before credentials are ready', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'aws',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_AWS_ROLE_ARN: 'arn:aws:iam::123456789012:role/test-role',
+      AWF_AUTH_AWS_REGION: 'us-east-1',
+      COPILOT_PROVIDER_BASE_URL: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    });
+    const resp = adapter.getUnconfiguredResponse();
+    const body = typeof resp.body === 'string' ? JSON.parse(resp.body) : resp.body;
+    expect(body.error.message).toMatch(/OIDC token \(aws\) unavailable/);
+
+    adapter.getAwsOidcProvider().shutdown();
+  });
+
+  it('does not construct an AWS OIDC provider when AWF_AUTH_AWS_ROLE_ARN is missing', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'aws',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_AWS_REGION: 'us-east-1',
+    });
+    expect(adapter.getAwsOidcProvider()).toBeNull();
+    expect(adapter.getOidcProvider()).toBeNull();
+  });
+});
+
+describe('createCopilotAdapter — GCP OIDC (Vertex AI) wiring', () => {
+  const fakeReq = { url: '/v1/chat/completions', method: 'POST', headers: {} };
+
+  it('exposes a GCP OIDC provider when AWF_AUTH_TYPE=github-oidc + AWF_AUTH_PROVIDER=gcp', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'gcp',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER:
+        'projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+      AWF_AUTH_GCP_SERVICE_ACCOUNT: 'sa@project.iam.gserviceaccount.com',
+      COPILOT_PROVIDER_BASE_URL: 'https://us-central1-aiplatform.googleapis.com',
+    });
+
+    const provider = adapter.getOidcProvider();
+    expect(provider).toBeTruthy();
+    expect(adapter.getAwsOidcProvider()).toBeNull();
+    provider.shutdown();
+  });
+
+  it('injects Bearer-prefixed OIDC token in getAuthHeaders when GCP token is available', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'gcp',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER:
+        'projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+      AWF_AUTH_GCP_SERVICE_ACCOUNT: 'sa@project.iam.gserviceaccount.com',
+      COPILOT_PROVIDER_BASE_URL: 'https://us-central1-aiplatform.googleapis.com',
+    });
+
+    const provider = adapter.getOidcProvider();
+    provider._cachedToken = 'gcp-access-token';
+    provider._expiresAt = Math.floor(Date.now() / 1000) + 600;
+
+    const headers = adapter.getAuthHeaders(fakeReq);
+    expect(headers['Authorization']).toBe(['Bearer', 'gcp-access-token'].join(' '));
+    expect(headers['Copilot-Integration-Id']).toBe('copilot-developer-cli');
+
+    provider.shutdown();
+  });
+
+  it('returns empty headers when GCP OIDC token has not yet been acquired', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'gcp',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER:
+        'projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+      AWF_AUTH_GCP_SERVICE_ACCOUNT: 'sa@project.iam.gserviceaccount.com',
+      COPILOT_PROVIDER_BASE_URL: 'https://us-central1-aiplatform.googleapis.com',
+    });
+
+    expect(adapter.getAuthHeaders(fakeReq)).toEqual({});
+    adapter.getOidcProvider().shutdown();
+  });
+
+  it('isEnabled returns false until GCP OIDC provider is ready', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'gcp',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER:
+        'projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+      AWF_AUTH_GCP_SERVICE_ACCOUNT: 'sa@project.iam.gserviceaccount.com',
+      COPILOT_PROVIDER_BASE_URL: 'https://us-central1-aiplatform.googleapis.com',
+    });
+    expect(adapter.isEnabled()).toBe(false);
+
+    const provider = adapter.getOidcProvider();
+    provider._cachedToken = 'gcp-access-token';
+    provider._expiresAt = Math.floor(Date.now() / 1000) + 600;
+    expect(adapter.isEnabled()).toBe(true);
+
+    provider.shutdown();
+  });
+
+  it('unconfigured-response surfaces the OIDC-specific error message before token is ready', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'gcp',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER:
+        'projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+      AWF_AUTH_GCP_SERVICE_ACCOUNT: 'sa@project.iam.gserviceaccount.com',
+      COPILOT_PROVIDER_BASE_URL: 'https://us-central1-aiplatform.googleapis.com',
+    });
+    const resp = adapter.getUnconfiguredResponse();
+    const body = typeof resp.body === 'string' ? JSON.parse(resp.body) : resp.body;
+    expect(body.error.message).toMatch(/OIDC token \(gcp\) unavailable/);
+
+    adapter.getOidcProvider().shutdown();
+  });
+
+  it('does not construct a GCP OIDC provider when AWF_AUTH_GCP_WORKLOAD_IDENTITY_PROVIDER is missing', () => {
+    const adapter = createCopilotAdapter({
+      AWF_AUTH_TYPE: 'github-oidc',
+      AWF_AUTH_PROVIDER: 'gcp',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://localhost/token',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'test-token',
+      AWF_AUTH_GCP_SERVICE_ACCOUNT: 'sa@project.iam.gserviceaccount.com',
+    });
+    expect(adapter.getOidcProvider()).toBeNull();
+    expect(adapter.getAwsOidcProvider()).toBeNull();
+  });
+});

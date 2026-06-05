@@ -71,8 +71,11 @@ env:
   # the AWF_AUTH_AZURE_* variables. awf reads these from the agent step's
   # process.env (via `sudo -E awf …`) and forwards them to the api-proxy
   # sidecar (see src/services/api-proxy-service-config.ts), which uses them
-  # for the GitHub OIDC → Azure AD federated-credential token exchange. The
-  # agent container itself does not need these values — only the sidecar.
+  # for the GitHub OIDC → Azure AD federated-credential token exchange.
+  # The api-proxy sidecar is the only component that needs them functionally;
+  # because the agent step runs with `awf --env-all`, the values are also
+  # passed through to the agent container, but they are non-sensitive
+  # identifiers (Azure tenant/client UUIDs) rather than credentials.
   AWF_AUTH_TYPE: github-oidc
   AWF_AUTH_PROVIDER: azure
   AWF_AUTH_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -84,9 +87,12 @@ sandbox:
 # allowlist currently covers COPILOT_PROVIDER_API_KEY / COPILOT_PROVIDER_BASE_URL
 # but does not yet include the AWF_AUTH_AZURE_* keys, so referencing
 # ${{ secrets.AZURE_TENANT_ID }} / ${{ secrets.AZURE_CLIENT_ID }} would fail
-# strict-mode compilation. AWF still forwards these values exclusively to the
-# api-proxy sidecar (see src/services/api-proxy-service-config.ts); they are
-# never written into the agent container's env.
+# strict-mode compilation. AWF forwards these values to the api-proxy sidecar
+# explicitly via src/services/api-proxy-service-config.ts, where they are used
+# for the OIDC → AAD token exchange. Because the agent step runs with
+# `awf --env-all` (which does not exclude AWF_AUTH_* vars), they are also
+# present in the agent container; this is acceptable here because Azure
+# tenant/client IDs are non-sensitive identifiers, not credentials.
 strict: false
 steps:
   - name: Pre-compute BYOK smoke test data
