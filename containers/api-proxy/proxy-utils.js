@@ -162,32 +162,39 @@ function composeBodyTransforms(first, second) {
   if (!first) return second;
   if (!second) return first;
   const isPromise = (v) => v && typeof v.then === 'function';
+  const isBlocked = (v) => v && typeof v === 'object' && !Buffer.isBuffer(v) && v.blocked;
   return (body) => {
     const a = first(body);
     if (isPromise(a)) {
       return Promise.resolve(a).then((aResolved) => {
+        if (isBlocked(aResolved)) return aResolved;
         const b = second(aResolved !== null ? aResolved : body);
         if (isPromise(b)) {
           return Promise.resolve(b).then((bResolved) => {
+            if (isBlocked(bResolved)) return bResolved;
             if (bResolved !== null) return bResolved;
             if (aResolved !== null) return aResolved;
             return null;
           });
         }
+        if (isBlocked(b)) return b;
         if (b !== null) return b;
         if (aResolved !== null) return aResolved;
         return null;
       });
     }
 
+    if (isBlocked(a)) return a;
     const b = second(a !== null ? a : body);
     if (isPromise(b)) {
       return Promise.resolve(b).then((bResolved) => {
+        if (isBlocked(bResolved)) return bResolved;
         if (bResolved !== null) return bResolved;
         if (a !== null) return a;
         return null;
       });
     }
+    if (isBlocked(b)) return b;
     if (b !== null) return b;
     if (a !== null) return a;
     return null;

@@ -48,6 +48,8 @@ interface AwfFileConfig {
       antigravity?: { host?: string; basePath?: string };
     };
     models?: Record<string, string[]>;
+    allowedModels?: string[];
+    disallowedModels?: string[];
     logging?: {
       debugTokens?: boolean;
       tokenLogDir?: string;
@@ -222,6 +224,8 @@ export function mapAwfFileConfigToCliOptions(config: AwfFileConfig): Record<stri
     geminiApiTarget: antigravityTargetConfig?.host ?? geminiTargetConfig?.host,
     geminiApiBasePath: antigravityTargetConfig?.basePath ?? geminiTargetConfig?.basePath,
     modelAliases: config.apiProxy?.models,
+    allowedModels: config.apiProxy?.allowedModels,
+    disallowedModels: config.apiProxy?.disallowedModels,
     debugTokens: config.apiProxy?.logging?.debugTokens,
     tokenLogDir: config.apiProxy?.logging?.tokenLogDir,
     anthropicTokenUrl: config.apiProxy?.auth?.anthropicTokenUrl,

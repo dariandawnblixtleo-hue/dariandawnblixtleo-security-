@@ -171,6 +171,12 @@ export function buildApiProxyServiceConfig(params: ApiProxyServiceConfigParams):
       ...(config.modelAliases && {
         AWF_MODEL_ALIASES: JSON.stringify({ models: config.modelAliases }),
       }),
+      ...(config.allowedModels && config.allowedModels.length > 0 && {
+        AWF_ALLOWED_MODELS: JSON.stringify(config.allowedModels),
+      }),
+      ...(config.disallowedModels && config.disallowedModels.length > 0 && {
+        AWF_DISALLOWED_MODELS: JSON.stringify(config.disallowedModels),
+      }),
       ...(config.modelFallback && {
         AWF_MODEL_FALLBACK: JSON.stringify(config.modelFallback),
       }),

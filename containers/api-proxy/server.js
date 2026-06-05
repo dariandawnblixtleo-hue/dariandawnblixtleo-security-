@@ -15,6 +15,7 @@
 const { logRequest } = require('./logging');
 const {
   MODEL_ALIASES,
+  MODEL_POLICY,
   MODEL_FALLBACK,
   parseModelFallbackConfig,
   makeModelBodyTransform: makeModelBodyTransformForProvider,
@@ -121,7 +122,7 @@ const { healthResponse, reflectEndpoints, handleManagementEndpoint } = createMan
   httpsProxy: HTTPS_PROXY,
   getModelAliases: () => {
     if (!MODEL_ALIASES) return null;
-    return { models: filterResolvableAliases(MODEL_ALIASES.models, cachedModels) };
+    return { models: filterResolvableAliases(MODEL_ALIASES.models, cachedModels, MODEL_POLICY) };
   },
   getModelFallback: () => MODEL_FALLBACK,
   getEffectiveModelFallback: () => getEffectiveModelFallbackForReflect(registeredAdapters),
@@ -133,14 +134,14 @@ const { healthResponse, reflectEndpoints, handleManagementEndpoint } = createMan
 
 function buildModelsJson() {
   const filteredAliases = MODEL_ALIASES
-    ? { models: filterResolvableAliases(MODEL_ALIASES.models, cachedModels) }
+    ? { models: filterResolvableAliases(MODEL_ALIASES.models, cachedModels, MODEL_POLICY) }
     : null;
   return _buildModelsJson(registeredAdapters, cachedModels, filteredAliases);
 }
 
 function writeModelsJson(logDir) {
   const filteredAliases = MODEL_ALIASES
-    ? { models: filterResolvableAliases(MODEL_ALIASES.models, cachedModels) }
+    ? { models: filterResolvableAliases(MODEL_ALIASES.models, cachedModels, MODEL_POLICY) }
     : null;
   return _writeModelsJson(registeredAdapters, cachedModels, filteredAliases, logDir);
 }

@@ -15,6 +15,8 @@ import { processAgentImageOption } from '../../domain-utils';
 export interface LogAndLimitsResult {
   logLevel: LogLevel;
   modelAliases: Record<string, string[]> | undefined;
+  allowedModels: string[] | undefined;
+  disallowedModels: string[] | undefined;
   maxEffectiveTokens: number | undefined;
   maxAiCredits: number | undefined;
   effectiveTokenModelMultipliers: Record<string, number> | undefined;
@@ -57,6 +59,21 @@ export function validateLogAndLimits(options: Record<string, unknown>): LogAndLi
   const modelAliases = (options as Record<string, unknown>).modelAliases as
     | Record<string, string[]>
     | undefined;
+  const allowedModelsRaw = (options as Record<string, unknown>).allowedModels;
+  const disallowedModelsRaw = (options as Record<string, unknown>).disallowedModels;
+  const validateModelGlobList = (value: unknown, label: string): string[] | undefined => {
+    if (value === undefined || value === null) return undefined;
+    if (!Array.isArray(value) || !value.every(entry => typeof entry === 'string')) {
+      console.error(`Error: ${label} must be an array of strings`);
+      process.exit(1);
+    }
+    const trimmed = (value as string[])
+      .map(entry => entry.trim())
+      .filter(entry => entry.length > 0);
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+  const allowedModels = validateModelGlobList(allowedModelsRaw, 'apiProxy.allowedModels');
+  const disallowedModels = validateModelGlobList(disallowedModelsRaw, 'apiProxy.disallowedModels');
   const maxEffectiveTokensOption = (options as Record<string, unknown>).maxEffectiveTokens as
     | string
     | number
@@ -186,6 +203,8 @@ export function validateLogAndLimits(options: Record<string, unknown>): LogAndLi
   return {
     logLevel,
     modelAliases,
+    allowedModels,
+    disallowedModels,
     maxEffectiveTokens,
     maxAiCredits,
     effectiveTokenModelMultipliers,

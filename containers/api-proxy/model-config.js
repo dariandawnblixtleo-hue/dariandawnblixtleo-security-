@@ -1,6 +1,6 @@
 'use strict';
 
-const { parseModelAliases, rewriteModelInBody, filterResolvableAliases } = require('./model-resolver');
+const { parseModelAliases, parseModelGlobList, normalizeModelPolicy, rewriteModelInBody, filterResolvableAliases } = require('./model-resolver');
 const { sanitizeForLog, logRequest } = require('./logging');
 const { diag } = require('./token-persistence');
 const { getCopilotModelFallbackPolicy } = require('./providers/copilot');
@@ -8,6 +8,14 @@ const { getCopilotModelFallbackPolicy } = require('./providers/copilot');
 const MODEL_ALIASES_RAW = (process.env.AWF_MODEL_ALIASES || '').trim() || undefined;
 const MODEL_ALIASES = parseModelAliases(MODEL_ALIASES_RAW);
 const DEFAULT_MODEL_FALLBACK = Object.freeze({ enabled: true, strategy: 'middle_power', excludeEngines: Object.freeze([]) });
+
+const MODEL_POLICY_ALLOWED_RAW = (process.env.AWF_ALLOWED_MODELS || '').trim() || undefined;
+const MODEL_POLICY_DISALLOWED_RAW = (process.env.AWF_DISALLOWED_MODELS || '').trim() || undefined;
+const MODEL_POLICY = Object.freeze(normalizeModelPolicy({
+  allowed: parseModelGlobList(MODEL_POLICY_ALLOWED_RAW),
+  disallowed: parseModelGlobList(MODEL_POLICY_DISALLOWED_RAW),
+}));
+const MODEL_POLICY_ENABLED = MODEL_POLICY.hasAllowList || MODEL_POLICY.hasDenyList;
 
 function parseExcludeEngines(value) {
   if (!Array.isArray(value)) return [];
@@ -52,6 +60,20 @@ if (MODEL_ALIASES) {
   });
 }
 
+if (MODEL_POLICY_ENABLED) {
+  logRequest('info', 'startup', {
+    message: 'Model policy loaded',
+    allowed_count: MODEL_POLICY.allowed.length,
+    disallowed_count: MODEL_POLICY.disallowed.length,
+    allowed: MODEL_POLICY.allowed,
+    disallowed: MODEL_POLICY.disallowed,
+  });
+} else if (MODEL_POLICY_ALLOWED_RAW || MODEL_POLICY_DISALLOWED_RAW) {
+  logRequest('warn', 'startup', {
+    message: 'AWF_ALLOWED_MODELS / AWF_DISALLOWED_MODELS were set but could not be parsed — model policy disabled',
+  });
+}
+
 logRequest('info', 'startup', {
   message: 'Model fallback policy loaded',
   model_fallback: MODEL_FALLBACK,
@@ -89,15 +111,43 @@ function getEffectiveModelFallbackForReflect(adapters) {
 }
 
 function makeModelBodyTransform(provider, cachedModels, refreshProviderModelsForResolution) {
-  if (!MODEL_ALIASES) return null;
+  if (!MODEL_ALIASES && !MODEL_POLICY_ENABLED) return null;
   const providerModelFallback = getModelFallbackForProvider(provider);
+  const aliasesMap = MODEL_ALIASES ? MODEL_ALIASES.models : null;
+  const policyArg = MODEL_POLICY_ENABLED ? MODEL_POLICY : null;
   return async (body) => {
-    let result = rewriteModelInBody(body, provider, MODEL_ALIASES.models, cachedModels, providerModelFallback);
+    let result = rewriteModelInBody(body, provider, aliasesMap, cachedModels, providerModelFallback, policyArg);
     if (!result || (result.fallback && result.fallback.activated)) {
       await refreshProviderModelsForResolution(provider);
-      result = rewriteModelInBody(body, provider, MODEL_ALIASES.models, cachedModels, providerModelFallback);
+      result = rewriteModelInBody(body, provider, aliasesMap, cachedModels, providerModelFallback, policyArg);
     }
     if (!result) return null;
+
+    if (result.blocked) {
+      const originalModel = sanitizeForLog(result.originalModel) || '(none)';
+      logRequest('warn', 'model_policy_blocked', {
+        provider,
+        original_model: originalModel,
+        reason: result.reason,
+        pattern: result.pattern,
+      });
+      for (const line of result.log || []) {
+        diag('model_alias_resolution_step', {
+          provider,
+          original_model: originalModel,
+          resolved_model: null,
+          step: line,
+        });
+      }
+      return {
+        blocked: true,
+        provider,
+        originalModel: result.originalModel,
+        reason: result.reason,
+        pattern: result.pattern,
+      };
+    }
+
     const originalModel = sanitizeForLog(result.originalModel) || '(none)';
     const resolvedModel = sanitizeForLog(result.resolvedModel);
     if (providerModelFallback.enabled && result.fallback) {
@@ -152,6 +202,7 @@ function makeModelBodyTransform(provider, cachedModels, refreshProviderModelsFor
 module.exports = {
   MODEL_ALIASES,
   MODEL_FALLBACK,
+  MODEL_POLICY,
   parseModelFallbackConfig,
   makeModelBodyTransform,
   filterResolvableAliases,

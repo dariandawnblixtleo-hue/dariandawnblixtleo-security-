@@ -68,6 +68,105 @@ function parseModelAliases(rawConfig) {
 }
 
 /**
+ * Parse a JSON-encoded array of provider-scoped model globs.
+ *
+ * Used by AWF_ALLOWED_MODELS / AWF_DISALLOWED_MODELS to build the model
+ * allow/deny lists enforced during alias resolution and inference requests.
+ *
+ * Returns an array of trimmed, non-empty strings. Returns [] for any
+ * invalid/absent input so callers can treat "no policy" as "no restriction".
+ *
+ * @param {string|null|undefined} rawConfig - JSON string (e.g. '["copilot/*opus*"]')
+ * @returns {string[]}
+ */
+function parseModelGlobList(rawConfig) {
+  if (!rawConfig) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(rawConfig);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out = [];
+  for (const entry of parsed) {
+    if (typeof entry !== 'string') continue;
+    const trimmed = entry.trim();
+    if (trimmed) out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Normalise a model-policy descriptor.
+ * @param {{allowed?: string[], disallowed?: string[]} | null | undefined} policy
+ * @returns {{allowed: string[], disallowed: string[], hasAllowList: boolean, hasDenyList: boolean}}
+ */
+function normalizeModelPolicy(policy) {
+  const allowed = Array.isArray(policy?.allowed) ? policy.allowed.filter(p => typeof p === 'string' && p.trim()) : [];
+  const disallowed = Array.isArray(policy?.disallowed) ? policy.disallowed.filter(p => typeof p === 'string' && p.trim()) : [];
+  return {
+    allowed,
+    disallowed,
+    hasAllowList: allowed.length > 0,
+    hasDenyList: disallowed.length > 0,
+  };
+}
+
+/**
+ * Check whether a "provider/model" pair is permitted by the model policy.
+ *
+ * Policy semantics:
+ *  - If the deny-list matches → reject.
+ *  - If the allow-list is non-empty and nothing in it matches → reject.
+ *  - Otherwise → allow.
+ *
+ * Policy patterns use the same provider-scoped glob syntax as alias entries
+ * ("provider/modelpattern"). A bare entry without "/" matches any provider.
+ *
+ * @param {string} provider - Concrete provider name (e.g. "copilot")
+ * @param {string} model - Concrete model name (no provider prefix)
+ * @param {{allowed?: string[], disallowed?: string[]} | null | undefined} policy
+ * @returns {{allowed: boolean, reason?: 'disallowed'|'not_in_allowlist', pattern?: string}}
+ */
+function checkModelPolicy(provider, model, policy) {
+  const normalized = normalizeModelPolicy(policy);
+  if (!normalized.hasAllowList && !normalized.hasDenyList) {
+    return { allowed: true };
+  }
+
+  for (const pattern of normalized.disallowed) {
+    if (matchProviderModelPattern(pattern, provider, model)) {
+      return { allowed: false, reason: 'disallowed', pattern };
+    }
+  }
+
+  if (normalized.hasAllowList) {
+    const match = normalized.allowed.find(pattern => matchProviderModelPattern(pattern, provider, model));
+    if (!match) {
+      return { allowed: false, reason: 'not_in_allowlist' };
+    }
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Match a single provider-scoped glob pattern against a provider/model pair.
+ * Bare patterns (no "/") match any provider.
+ */
+function matchProviderModelPattern(pattern, provider, model) {
+  const slashIdx = pattern.indexOf('/');
+  if (slashIdx === -1) {
+    return globMatch(pattern, model);
+  }
+  const patternProvider = pattern.slice(0, slashIdx).toLowerCase();
+  const modelPattern = pattern.slice(slashIdx + 1);
+  if (patternProvider !== '*' && patternProvider !== provider.toLowerCase()) return false;
+  return globMatch(modelPattern, model);
+}
+
+/**
  * Case-insensitive glob pattern matching supporting * wildcards.
  *
  * @param {string} pattern - Glob pattern (supports * as wildcard)
@@ -154,18 +253,25 @@ function inferModelFamilyPrefix(requestedModel) {
   return null;
 }
 
-function selectMiddlePowerFallback(requestedModel, availableModels, currentProvider, reason, modelFallbackConfig) {
+function selectMiddlePowerFallback(requestedModel, availableModels, currentProvider, reason, modelFallbackConfig, modelPolicy = null) {
   const fallbackConfig = normalizeFallbackConfig(modelFallbackConfig);
   if (!fallbackConfig.enabled || fallbackConfig.strategy !== 'middle_power') return null;
 
   const providerModels = Array.isArray(availableModels[currentProvider]) ? availableModels[currentProvider] : [];
   if (providerModels.length === 0) return null;
 
+  const policy = normalizeModelPolicy(modelPolicy);
+  const policyEnabled = policy.hasAllowList || policy.hasDenyList;
+  const allowed = policyEnabled
+    ? providerModels.filter(m => checkModelPolicy(currentProvider, m, policy).allowed)
+    : providerModels;
+  if (allowed.length === 0) return null;
+
   const familyPrefix = inferModelFamilyPrefix(requestedModel);
   const familyCandidates = familyPrefix
-    ? providerModels.filter(model => model.toLowerCase().startsWith(familyPrefix))
+    ? allowed.filter(model => model.toLowerCase().startsWith(familyPrefix))
     : [];
-  const selectedPool = familyCandidates.length > 0 ? familyCandidates : providerModels;
+  const selectedPool = familyCandidates.length > 0 ? familyCandidates : allowed;
   const sortedCandidates = getTierSortedModels(currentProvider, selectedPool);
   if (sortedCandidates.length === 0) return null;
 
@@ -187,9 +293,9 @@ function selectMiddlePowerFallback(requestedModel, availableModels, currentProvi
  * Attempts middle-power fallback and returns a resolution result if successful.
  * Encapsulates the repeated call + log + return pattern used in two places.
  */
-function tryMiddlePowerFallback(requestedModel, availableModels, currentProvider, reason, fallbackConfig, log) {
+function tryMiddlePowerFallback(requestedModel, availableModels, currentProvider, reason, fallbackConfig, log, modelPolicy = null) {
   const middlePowerFallback = selectMiddlePowerFallback(
-    requestedModel, availableModels, currentProvider, reason, fallbackConfig
+    requestedModel, availableModels, currentProvider, reason, fallbackConfig, modelPolicy
   );
   if (middlePowerFallback) {
     log.push(`[model-resolver] middle-power fallback: "${requestedModel}" → "${middlePowerFallback.resolvedModel}"`);
@@ -217,10 +323,17 @@ function tryMiddlePowerFallback(requestedModel, availableModels, currentProvider
  * @param {{ enabled?: boolean, strategy?: string }} [modelFallbackConfig]
  * @returns {{ resolvedModel: string, log: string[], fallback?: object } | null}
  */
-function resolveModel(requestedModel, aliases, availableModels, currentProvider, chain = [], modelFallbackConfig = DEFAULT_MODEL_FALLBACK) {
+function resolveModel(requestedModel, aliases, availableModels, currentProvider, chain = [], modelFallbackConfig = DEFAULT_MODEL_FALLBACK, modelPolicy = null) {
   const log = [];
   const key = requestedModel.toLowerCase();
   const fallbackConfig = normalizeFallbackConfig(modelFallbackConfig);
+  const policy = normalizeModelPolicy(modelPolicy);
+  const policyEnabled = policy.hasAllowList || policy.hasDenyList;
+
+  const policyAllows = (model) => {
+    if (!policyEnabled) return true;
+    return checkModelPolicy(currentProvider, model, policy).allowed;
+  };
 
   // ── Loop detection ────────────────────────────────────────────────────────
   if (chain.includes(key)) {
@@ -251,6 +364,10 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
     const providerModels = (availableModels[currentProvider] || []);
     const direct = providerModels.find(m => m.toLowerCase() === key);
     if (direct) {
+      if (!policyAllows(direct)) {
+        log.push(`[model-resolver] direct match blocked by model policy: "${requestedModel}" → "${direct}"`);
+        return null;
+      }
       log.push(`[model-resolver] direct match: "${requestedModel}" → "${direct}"`);
       return {
         resolvedModel: direct,
@@ -266,7 +383,9 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
     const family = key.match(/^(gpt-5)\.\d+$/)?.[1];
     if (family) {
       const familyPrefix = `${family}.`;
-      const familyCandidates = providerModels.filter(m => m.toLowerCase().startsWith(familyPrefix));
+      const familyCandidates = providerModels
+        .filter(m => m.toLowerCase().startsWith(familyPrefix))
+        .filter(policyAllows);
       if (familyCandidates.length > 0) {
         const sorted = [...new Set(familyCandidates)].sort(compareByVersion);
         const fallback = sorted[0];
@@ -282,7 +401,7 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
     }
     const fallbackResult = tryMiddlePowerFallback(
       requestedModel, availableModels, currentProvider,
-      'no_alias_match_and_not_in_available_models', fallbackConfig, log
+      'no_alias_match_and_not_in_available_models', fallbackConfig, log, policy
     );
     if (fallbackResult) return fallbackResult;
     // No match at all — cannot resolve.
@@ -296,13 +415,14 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
 
   // ── Expand each pattern ───────────────────────────────────────────────────
   const candidates = [];
+  let policyFiltered = 0;
 
   for (const pattern of patterns) {
     const slashIdx = pattern.indexOf('/');
 
     if (slashIdx === -1) {
       // Recursive alias reference (no provider prefix)
-      const sub = resolveModel(pattern, aliases, availableModels, currentProvider, newChain, fallbackConfig);
+      const sub = resolveModel(pattern, aliases, availableModels, currentProvider, newChain, fallbackConfig, policy);
       if (sub) {
         log.push(...sub.log);
         candidates.push(sub.resolvedModel);
@@ -317,6 +437,10 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
       const providerModels = (availableModels[currentProvider] || []);
       for (const model of providerModels) {
         if (globMatch(modelPattern, model)) {
+          if (!policyAllows(model)) {
+            policyFiltered++;
+            continue;
+          }
           candidates.push(model);
         }
       }
@@ -324,12 +448,16 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
   }
 
   if (candidates.length === 0) {
-    log.push(`[model-resolver] no candidates found for "${aliasKey}" on provider "${currentProvider}"`);
+    if (policyFiltered > 0) {
+      log.push(`[model-resolver] all ${policyFiltered} candidate(s) for "${aliasKey}" filtered out by model policy`);
+    } else {
+      log.push(`[model-resolver] no candidates found for "${aliasKey}" on provider "${currentProvider}"`);
+    }
     const hasProviderPattern = patterns.some((pattern) => pattern.includes('/'));
     if (aliasDefinition.fallback && hasProviderPattern) {
       const fallbackResult = tryMiddlePowerFallback(
         requestedModel, availableModels, currentProvider,
-        'no_alias_match_and_not_in_available_models', fallbackConfig, log
+        'no_alias_match_and_not_in_available_models', fallbackConfig, log, policy
       );
       if (fallbackResult) return fallbackResult;
     }
@@ -374,7 +502,7 @@ function resolveModel(requestedModel, aliases, availableModels, currentProvider,
  * @param {Record<string, string[]|null>} availableModels - Cached models per provider (null = not yet fetched)
  * @returns {Record<string, string[]|{patterns: string[], fallback?: boolean}>}
  */
-function filterResolvableAliases(aliases, availableModels) {
+function filterResolvableAliases(aliases, availableModels, modelPolicy = null) {
   if (!aliases || typeof aliases !== 'object') return aliases;
 
   // Providers with a non-empty model list (data is available)
@@ -390,7 +518,7 @@ function filterResolvableAliases(aliases, availableModels) {
 
   for (const aliasKey of Object.keys(aliases)) {
     const canResolve = providersWithData.some(provider => {
-      const resolution = resolveModel(aliasKey, aliases, availableModels, provider, [], noFallback);
+      const resolution = resolveModel(aliasKey, aliases, availableModels, provider, [], noFallback, modelPolicy);
       return resolution !== null;
     });
 
@@ -407,15 +535,18 @@ function filterResolvableAliases(aliases, availableModels) {
  *
  * Returns the rewritten body buffer and the resolution log when a rewrite occurs.
  * Returns null when no rewrite is needed or possible.
+ * Returns a `{ blocked: true, ... }` object when the requested model is rejected
+ * by the configured allow/deny model policy.
  *
  * @param {Buffer} body - Raw request body bytes
  * @param {string} provider - Current provider (e.g. "copilot")
- * @param {Record<string, string[]|{patterns: string[], fallback?: boolean}>} aliases - Parsed alias map
+ * @param {Record<string, string[]|{patterns: string[], fallback?: boolean}>|null} aliases - Parsed alias map
  * @param {Record<string, string[]|null>} availableModels - Cached models per provider
  * @param {{ enabled?: boolean, strategy?: string }} [modelFallbackConfig]
- * @returns {{ body: Buffer, originalModel: string, resolvedModel: string, log: string[], fallback?: object } | null}
+ * @param {{ allowed?: string[], disallowed?: string[] } | null} [modelPolicy]
+ * @returns {{ body: Buffer, originalModel: string, resolvedModel: string, log: string[], fallback?: object } | { blocked: true, originalModel: string, reason: string, pattern?: string, log: string[] } | null}
  */
-function rewriteModelInBody(body, provider, aliases, availableModels, modelFallbackConfig = DEFAULT_MODEL_FALLBACK) {
+function rewriteModelInBody(body, provider, aliases, availableModels, modelFallbackConfig = DEFAULT_MODEL_FALLBACK, modelPolicy = null) {
   // Only attempt rewrite for non-empty bodies
   if (!body || body.length === 0) return null;
 
@@ -424,11 +555,47 @@ function rewriteModelInBody(body, provider, aliases, availableModels, modelFallb
 
   // Determine the requested model. If absent, try the default alias ("").
   const originalModel = typeof parsed.model === 'string' ? parsed.model : '';
+  const policy = normalizeModelPolicy(modelPolicy);
+  const policyEnabled = policy.hasAllowList || policy.hasDenyList;
 
-  const resolution = resolveModel(originalModel, aliases, availableModels, provider, [], modelFallbackConfig);
-  if (!resolution) return null;
+  const aliasMap = aliases && typeof aliases === 'object' ? aliases : {};
+  const resolution = resolveModel(originalModel, aliasMap, availableModels, provider, [], modelFallbackConfig, policy);
+
+  // If alias resolution failed but policy is enabled and a concrete model was
+  // requested, surface a "blocked" result so the proxy can reject the request
+  // with a clear diagnostic rather than passing it upstream.
+  if (!resolution) {
+    if (policyEnabled && originalModel) {
+      const check = checkModelPolicy(provider, originalModel, policy);
+      if (!check.allowed) {
+        return {
+          blocked: true,
+          originalModel,
+          reason: check.reason,
+          pattern: check.pattern,
+          log: [`[model-resolver] request blocked by model policy: "${originalModel}" (${check.reason})`],
+        };
+      }
+    }
+    return null;
+  }
 
   const { resolvedModel, log } = resolution;
+
+  // Defence-in-depth: even if `resolveModel` returned a candidate, double-check
+  // it against the policy before rewriting the request body.
+  if (policyEnabled) {
+    const check = checkModelPolicy(provider, resolvedModel, policy);
+    if (!check.allowed) {
+      return {
+        blocked: true,
+        originalModel: originalModel || resolvedModel,
+        reason: check.reason,
+        pattern: check.pattern,
+        log: [...log, `[model-resolver] resolved model blocked by policy: "${resolvedModel}" (${check.reason})`],
+      };
+    }
+  }
 
   // No rewrite needed if the model is already the resolved value
   if (resolvedModel === parsed.model) return null;
@@ -442,6 +609,10 @@ function rewriteModelInBody(body, provider, aliases, availableModels, modelFallb
 
 module.exports = {
   parseModelAliases,
+  parseModelGlobList,
+  normalizeModelPolicy,
+  checkModelPolicy,
+  matchProviderModelPattern,
   globMatch,
   extractVersionNumbers,
   compareByVersion,

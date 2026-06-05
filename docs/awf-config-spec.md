@@ -109,6 +109,8 @@ the corresponding CLI flag.
 - `apiProxy.modelRouter.providerType` → *(config-only; maps to `COPILOT_PROVIDER_TYPE`)*
 - `apiProxy.modelRouter.baseUrl` → *(config-only; maps to `COPILOT_PROVIDER_BASE_URL`)*
 - `apiProxy.models` → *(config-only; model alias rewriting)*
+- `apiProxy.allowedModels` → *(config-only; maps to `AWF_ALLOWED_MODELS` — provider-scoped glob allowlist)*
+- `apiProxy.disallowedModels` → *(config-only; maps to `AWF_DISALLOWED_MODELS` — provider-scoped glob denylist)*
 - `apiProxy.logging.debugTokens` → *(config-only; maps to `AWF_DEBUG_TOKENS`)*
 - `apiProxy.logging.tokenLogDir` → *(config-only; maps to `AWF_TOKEN_LOG_DIR`)*
 - `apiProxy.auth.type` → *(config-only; maps to `AWF_AUTH_TYPE`)*
@@ -1093,6 +1095,67 @@ that the specified model is available in at least one provider's model catalogue
 This enables workflow authors to get clear, early feedback when a retired or
 misspelled model is specified, rather than waiting for the first API request to
 fail with an opaque error.
+
+### 12.7 Model Allow/Deny Policy
+
+`apiProxy.allowedModels` and `apiProxy.disallowedModels` provide enterprise-grade
+allow/deny lists for model usage, enforced both during alias resolution and when
+serving inference requests.
+
+**Configuration:**
+
+```json
+{
+  "apiProxy": {
+    "allowedModels": ["copilot/gpt-*", "copilot/claude-sonnet-*"],
+    "disallowedModels": ["*/claude-opus-*", "copilot/o1-*"]
+  }
+}
+```
+
+**Mapping:**
+- `apiProxy.allowedModels` → `AWF_ALLOWED_MODELS` *(config-only; JSON-encoded `string[]`)*
+- `apiProxy.disallowedModels` → `AWF_DISALLOWED_MODELS` *(config-only; JSON-encoded `string[]`)*
+
+**Pattern syntax:** Each entry follows the [gh-aw model alias specification](https://github.com/github/gh-aw/blob/main/docs/src/content/docs/specs/model-alias-specification.md):
+
+- `provider/modelglob` — restricts the match to a specific provider (`copilot`,
+  `anthropic`, `openai`, `azure-openai`, `aws-bedrock`, `gcp-vertex`).
+- `*/modelglob` or `modelglob` — matches any provider.
+- `*` acts as a case-insensitive wildcard within the model name.
+
+**Evaluation order:**
+
+1. If `disallowedModels` is non-empty and the (provider, model) pair matches **any**
+   denylist pattern, the model is blocked.
+2. Otherwise, if `allowedModels` is non-empty, the model must match **at least one**
+   allowlist pattern to be permitted.
+3. If both lists are empty, all models are allowed (default behaviour).
+
+**Enforcement points:**
+
+- **Alias resolution:** When resolving `apiProxy.models` aliases, candidate
+  resolutions that fail the policy are filtered out. If an alias resolves only to
+  blocked candidates, the request is rejected.
+- **Inference requests:** When a request is forwarded to a provider, the resolved
+  model is re-checked against the policy. Blocked requests receive an HTTP `403`
+  response with body:
+
+  ```json
+  {
+    "error": {
+      "type": "model_blocked_by_policy",
+      "message": "Model 'claude-opus-4' is blocked by AWF policy",
+      "provider": "copilot",
+      "model": "claude-opus-4",
+      "reason": "disallowed"
+    }
+  }
+  ```
+
+The goal of this feature is to provide enterprise-level safeguards against
+restricted models, prevent accidental use of expensive models such as Opus, and
+support compliance requirements where certain models must not be enabled.
 
 ## 13. Model Alias Logging
 

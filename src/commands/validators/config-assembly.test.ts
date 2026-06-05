@@ -86,6 +86,8 @@ describe('config-assembly', () => {
     memoryLimit: undefined,
     agentImage: undefined,
     modelAliases: {},
+    allowedModels: undefined,
+    disallowedModels: undefined,
     maxEffectiveTokens: undefined,
     maxAiCredits: undefined,
     effectiveTokenModelMultipliers: {},

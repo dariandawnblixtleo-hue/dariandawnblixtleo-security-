@@ -466,6 +466,33 @@ function proxyRequest(req, res, targetHost, injectHeaders, provider, basePath = 
 
     if (bodyTransform && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
       const transformed = await bodyTransform(body);
+      if (transformed && typeof transformed === 'object' && !Buffer.isBuffer(transformed) && transformed.blocked) {
+        const duration = Date.now() - startTime;
+        metrics.gaugeDec('active_requests', { provider });
+        metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
+        logRequest('warn', 'request_complete', {
+          request_id: requestId, provider, method: req.method,
+          path: sanitizeForLog(req.url), status: 403, duration_ms: duration,
+          request_bytes: totalBytes, upstream_host: targetHost,
+          blocked_model: sanitizeForLog(transformed.originalModel),
+          block_reason: transformed.reason,
+        });
+        otel.endSpan(span, 403);
+        if (!res.headersSent) res.writeHead(403, { 'Content-Type': 'application/json' });
+        const reasonText = transformed.reason === 'not_in_allowlist'
+          ? 'is not in the configured allowed-models list'
+          : `is blocked by the configured disallowed-models policy${transformed.pattern ? ` (pattern: ${transformed.pattern})` : ''}`;
+        res.end(JSON.stringify({
+          error: {
+            message: `Model "${transformed.originalModel || '(none)'}" ${reasonText}.`,
+            type: 'model_blocked_by_policy',
+            provider,
+            model: transformed.originalModel || null,
+            reason: transformed.reason,
+          },
+        }));
+        return;
+      }
       if (transformed) body = transformed;
     }
 

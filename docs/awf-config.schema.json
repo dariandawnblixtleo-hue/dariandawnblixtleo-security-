@@ -186,6 +186,20 @@
             }
           }
         },
+        "allowedModels": {
+          "type": "array",
+          "description": "Optional allow-list of provider-scoped model globs (e.g. \"copilot/*sonnet*\"). When set, the API proxy refuses inference requests and alias resolutions that do not match at least one entry. Bare entries with no provider prefix apply to every provider.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disallowedModels": {
+          "type": "array",
+          "description": "Optional deny-list of provider-scoped model globs (e.g. \"copilot/*opus*\"). When set, the API proxy refuses inference requests and alias resolutions whose resolved model matches any entry. Evaluated before the allow-list.",
+          "items": {
+            "type": "string"
+          }
+        },
         "auth": {
           "type": "object",
           "description": "Authentication configuration for the API proxy sidecar. Enables OIDC-based credential exchange (e.g., GitHub OIDC → Azure AD, AWS STS, GCP Workload Identity, or Anthropic Workload Identity Federation). See docs/awf-config-spec.md §9.5.",

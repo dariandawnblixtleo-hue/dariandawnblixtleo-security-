@@ -428,6 +428,38 @@ export interface ApiProxyOptions {
   modelAliases?: Record<string, string[]>;
 
   /**
+   * Allow-list of provider-scoped model globs (e.g. `copilot/*sonnet*`).
+   *
+   * When set, the API proxy refuses any inference request whose resolved
+   * model does not match at least one entry, and filters out non-matching
+   * candidates during alias resolution. Bare entries with no provider prefix
+   * apply to every provider (e.g. `*opus*`).
+   *
+   * Use together with {@link disallowedModels} to enforce enterprise model
+   * governance: e.g. require a specific Sonnet/GPT-5 family while blocking
+   * expensive Opus models.
+   *
+   * Set via the `apiProxy.allowedModels` section of the AWF config file.
+   *
+   * @example ["copilot/*sonnet*", "copilot/gpt-5*"]
+   */
+  allowedModels?: string[];
+
+  /**
+   * Deny-list of provider-scoped model globs (e.g. `copilot/*opus*`).
+   *
+   * When set, the API proxy refuses any inference request whose resolved
+   * model matches an entry, and filters those candidates out during alias
+   * resolution so aliases never pick a denied model. The deny-list is
+   * evaluated before {@link allowedModels}.
+   *
+   * Set via the `apiProxy.disallowedModels` section of the AWF config file.
+   *
+   * @example ["copilot/*opus*", "anthropic/*opus*"]
+   */
+  disallowedModels?: string[];
+
+  /**
    * Expected model name for pre-startup validation.
    *
    * When set, the API proxy validates at startup that this model is available

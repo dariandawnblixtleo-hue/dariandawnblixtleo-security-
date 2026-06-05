@@ -4,6 +4,9 @@
 
 const {
   parseModelAliases,
+  parseModelGlobList,
+  checkModelPolicy,
+  matchProviderModelPattern,
   globMatch,
   extractVersionNumbers,
   compareByVersion,
@@ -575,5 +578,163 @@ describe('filterResolvableAliases', () => {
     const result = filterResolvableAliases(extendedAliases, availableModels);
     expect(result).toHaveProperty('sonnet');
     expect(result).not.toHaveProperty('legacy');
+  });
+});
+
+// ── Allowed / Disallowed model policy ──────────────────────────────────────
+
+describe('parseModelGlobList', () => {
+  it('should return [] for null/undefined/empty', () => {
+    expect(parseModelGlobList(null)).toEqual([]);
+    expect(parseModelGlobList(undefined)).toEqual([]);
+    expect(parseModelGlobList('')).toEqual([]);
+  });
+
+  it('should return [] for invalid JSON', () => {
+    expect(parseModelGlobList('not-json')).toEqual([]);
+  });
+
+  it('should return [] when JSON is not an array', () => {
+    expect(parseModelGlobList(JSON.stringify({ a: 1 }))).toEqual([]);
+    expect(parseModelGlobList(JSON.stringify('string'))).toEqual([]);
+  });
+
+  it('should parse an array of strings and drop non-strings/blank entries', () => {
+    expect(parseModelGlobList(JSON.stringify(['copilot/*opus*', '  ', 5, 'openai/o*']))).toEqual([
+      'copilot/*opus*',
+      'openai/o*',
+    ]);
+  });
+});
+
+describe('matchProviderModelPattern', () => {
+  it('matches provider-scoped patterns case-insensitively', () => {
+    expect(matchProviderModelPattern('copilot/*opus*', 'copilot', 'claude-opus-4.5')).toBe(true);
+    expect(matchProviderModelPattern('copilot/*opus*', 'COPILOT', 'CLAUDE-OPUS-4.5')).toBe(true);
+  });
+
+  it('rejects when provider segment does not match', () => {
+    expect(matchProviderModelPattern('copilot/*opus*', 'openai', 'gpt-opus-x')).toBe(false);
+  });
+
+  it('treats bare patterns (no slash) as matching any provider', () => {
+    expect(matchProviderModelPattern('*opus*', 'anthropic', 'claude-opus-4.5')).toBe(true);
+    expect(matchProviderModelPattern('*opus*', 'copilot', 'claude-opus-4.5')).toBe(true);
+  });
+
+  it('supports a "*" provider wildcard', () => {
+    expect(matchProviderModelPattern('*/gpt-5*', 'openai', 'gpt-5-mini')).toBe(true);
+    expect(matchProviderModelPattern('*/gpt-5*', 'copilot', 'gpt-5')).toBe(true);
+  });
+});
+
+describe('checkModelPolicy', () => {
+  it('allows everything when both lists are empty', () => {
+    expect(checkModelPolicy('copilot', 'whatever', {}).allowed).toBe(true);
+    expect(checkModelPolicy('copilot', 'whatever', null).allowed).toBe(true);
+  });
+
+  it('blocks models matching the deny-list', () => {
+    const policy = { disallowed: ['copilot/*opus*'] };
+    const result = checkModelPolicy('copilot', 'claude-opus-4.5', policy);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe('disallowed');
+    expect(result.pattern).toBe('copilot/*opus*');
+  });
+
+  it('allows models not in the deny-list', () => {
+    const policy = { disallowed: ['copilot/*opus*'] };
+    expect(checkModelPolicy('copilot', 'claude-sonnet-4.5', policy).allowed).toBe(true);
+  });
+
+  it('rejects models outside the allow-list', () => {
+    const policy = { allowed: ['copilot/*sonnet*'] };
+    const result = checkModelPolicy('copilot', 'claude-opus-4.5', policy);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe('not_in_allowlist');
+  });
+
+  it('accepts models inside the allow-list', () => {
+    const policy = { allowed: ['copilot/*sonnet*'] };
+    expect(checkModelPolicy('copilot', 'claude-sonnet-4.5', policy).allowed).toBe(true);
+  });
+
+  it('evaluates deny-list before allow-list', () => {
+    const policy = { allowed: ['copilot/*'], disallowed: ['copilot/*opus*'] };
+    expect(checkModelPolicy('copilot', 'claude-opus-4.5', policy).allowed).toBe(false);
+    expect(checkModelPolicy('copilot', 'claude-sonnet-4.5', policy).allowed).toBe(true);
+  });
+});
+
+describe('resolveModel with policy', () => {
+  const availableModels = {
+    copilot: ['claude-sonnet-4.5', 'claude-opus-4.5', 'gpt-5'],
+  };
+
+  it('filters disallowed candidates out of alias resolution', () => {
+    const aliases = { large: ['copilot/claude-*'] };
+    const policy = { disallowed: ['copilot/*opus*'] };
+    const result = resolveModel('large', aliases, availableModels, 'copilot', [], undefined, policy);
+    expect(result).not.toBeNull();
+    expect(result.resolvedModel).toBe('claude-sonnet-4.5');
+  });
+
+  it('returns null when every alias candidate is disallowed (no fallback) ', () => {
+    const aliases = { onlyopus: { patterns: ['copilot/*opus*'], fallback: false } };
+    const policy = { disallowed: ['copilot/*opus*'] };
+    const result = resolveModel('onlyopus', aliases, availableModels, 'copilot', [], { enabled: false }, policy);
+    expect(result).toBeNull();
+  });
+
+  it('refuses a direct model match when it is disallowed', () => {
+    const policy = { disallowed: ['copilot/*opus*'] };
+    const result = resolveModel('claude-opus-4.5', {}, availableModels, 'copilot', [], { enabled: false }, policy);
+    expect(result).toBeNull();
+  });
+
+  it('permits a direct match when it is on the allow-list', () => {
+    const policy = { allowed: ['copilot/*sonnet*'] };
+    const result = resolveModel('claude-sonnet-4.5', {}, availableModels, 'copilot', [], { enabled: false }, policy);
+    expect(result).not.toBeNull();
+    expect(result.resolvedModel).toBe('claude-sonnet-4.5');
+  });
+});
+
+describe('rewriteModelInBody with policy', () => {
+  const availableModels = { copilot: ['claude-sonnet-4.5', 'claude-opus-4.5'] };
+
+  it('returns a blocked result when the requested concrete model is disallowed', () => {
+    const body = Buffer.from(JSON.stringify({ model: 'claude-opus-4.5', messages: [] }));
+    const policy = { disallowed: ['copilot/*opus*'] };
+    const result = rewriteModelInBody(body, 'copilot', null, availableModels, { enabled: false }, policy);
+    expect(result).not.toBeNull();
+    expect(result.blocked).toBe(true);
+    expect(result.originalModel).toBe('claude-opus-4.5');
+    expect(result.reason).toBe('disallowed');
+  });
+
+  it('rewrites to an allowed alias candidate when one exists', () => {
+    const body = Buffer.from(JSON.stringify({ model: 'large', messages: [] }));
+    const aliases = { large: ['copilot/claude-*'] };
+    const policy = { disallowed: ['copilot/*opus*'] };
+    const result = rewriteModelInBody(body, 'copilot', aliases, availableModels, undefined, policy);
+    expect(result).not.toBeNull();
+    expect(result.blocked).toBeUndefined();
+    expect(result.resolvedModel).toBe('claude-sonnet-4.5');
+  });
+
+  it('blocks requests for concrete models outside the allow-list', () => {
+    const body = Buffer.from(JSON.stringify({ model: 'claude-opus-4.5', messages: [] }));
+    const policy = { allowed: ['copilot/*sonnet*'] };
+    const result = rewriteModelInBody(body, 'copilot', null, availableModels, { enabled: false }, policy);
+    expect(result).not.toBeNull();
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('not_in_allowlist');
+  });
+
+  it('returns null when no policy is configured and no aliases match', () => {
+    const body = Buffer.from(JSON.stringify({ model: 'unknown-model', messages: [] }));
+    const result = rewriteModelInBody(body, 'copilot', null, availableModels, { enabled: false }, null);
+    expect(result).toBeNull();
   });
 });
