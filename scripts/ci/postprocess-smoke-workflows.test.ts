@@ -513,3 +513,50 @@ describe('issueDuplicationConclusionConcurrencyRegex', () => {
     expect(result).toContain('gh-aw-conclusion-issue-duplication-detector-');
   });
 });
+
+// ── smoke-model-policy apiProxy injection regex tests ─────────────────────
+// Mirrors the pattern in postprocess-smoke-workflows.ts that injects
+// apiProxy.allowedModels / apiProxy.disallowedModels into the inline
+// awf-config.json JSON string emitted by the gh-aw compiler.
+
+const apiProxyOpenRegex =
+  /"apiProxy":\{(?!"allowedModels"|"disallowedModels")/g;
+
+describe('apiProxyOpenRegex (smoke-model-policy injection)', () => {
+  const POLICY_FIELDS =
+    '"allowedModels":["*"],' +
+    '"disallowedModels":["*/awf-smoke-blocked-test-model*"],';
+
+  it('matches a fresh "apiProxy":{ block from the gh-aw compiler', () => {
+    const input = '...,"apiProxy":{"enabled":true,"maxRuns":500},...';
+    apiProxyOpenRegex.lastIndex = 0;
+    expect(apiProxyOpenRegex.test(input)).toBe(true);
+  });
+
+  it('replaces "apiProxy":{ with the injected allow/deny fields', () => {
+    const input = '"apiProxy":{"enabled":true,"maxRuns":500}';
+    apiProxyOpenRegex.lastIndex = 0;
+    const output = input.replace(apiProxyOpenRegex, `"apiProxy":{${POLICY_FIELDS}`);
+    expect(output).toBe(
+      '"apiProxy":{"allowedModels":["*"],"disallowedModels":["*/awf-smoke-blocked-test-model*"],"enabled":true,"maxRuns":500}'
+    );
+  });
+
+  it('is idempotent: skips a block that already starts with "allowedModels"', () => {
+    const input = '"apiProxy":{"allowedModels":["*"],"enabled":true}';
+    apiProxyOpenRegex.lastIndex = 0;
+    expect(apiProxyOpenRegex.test(input)).toBe(false);
+  });
+
+  it('is idempotent: skips a block that already starts with "disallowedModels"', () => {
+    const input = '"apiProxy":{"disallowedModels":["x"],"enabled":true}';
+    apiProxyOpenRegex.lastIndex = 0;
+    expect(apiProxyOpenRegex.test(input)).toBe(false);
+  });
+
+  it('does not match an unrelated key that happens to contain "apiProxy"', () => {
+    const input = '"notApiProxy":{"foo":1}';
+    apiProxyOpenRegex.lastIndex = 0;
+    expect(apiProxyOpenRegex.test(input)).toBe(false);
+  });
+});

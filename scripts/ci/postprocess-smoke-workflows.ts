@@ -643,6 +643,40 @@ for (const workflowPath of workflowPaths) {
   }
 
 
+  // For smoke-model-policy: inject apiProxy.allowedModels / apiProxy.disallowedModels
+  // into the inline awf-config.json emitted by the gh-aw compiler. The compiler
+  // has no frontmatter knob for these fields, so we patch the single-line JSON
+  // string that the agent step writes to ${RUNNER_TEMP}/gh-aw/awf-config.json.
+  // The injected disallow pattern matches no real model, leaving the agent's
+  // own model unaffected; the smoke test then issues a curl through the
+  // api-proxy for that pattern and asserts a 403 model_blocked_by_policy.
+  const isModelPolicySmoke = workflowPath.includes('smoke-model-policy.lock.yml');
+  if (isModelPolicySmoke) {
+    const policySentinel = '"disallowedModels":["*/awf-smoke-blocked-test-model*"]';
+    if (!content.includes(policySentinel)) {
+      const apiProxyOpenRegex = /"apiProxy":\{(?!"allowedModels"|"disallowedModels")/g;
+      const matches = content.match(apiProxyOpenRegex);
+      if (matches && matches.length > 0) {
+        const policyFields =
+          '"allowedModels":["*"],' +
+          '"disallowedModels":["*/awf-smoke-blocked-test-model*"],';
+        content = content.replace(apiProxyOpenRegex, `"apiProxy":{${policyFields}`);
+        modified = true;
+        console.log(
+          `  Injected apiProxy.allowedModels/disallowedModels into ${matches.length} awf-config.json block(s)`
+        );
+      } else {
+        console.warn(
+          `  WARNING: Could not find "apiProxy":{ block in smoke-model-policy.lock.yml. ` +
+            `The compiled lock file may have changed structure. Manual review required.`
+        );
+      }
+    } else {
+      console.log(`  apiProxy.allowedModels/disallowedModels already injected`);
+    }
+  }
+
+
   // The step downloads a private action but is never used in these jobs,
   // causing 401 Unauthorized failures when permissions: {} is set.
   const updateCacheSetupMatches = content.match(updateCacheSetupScriptRegex);
