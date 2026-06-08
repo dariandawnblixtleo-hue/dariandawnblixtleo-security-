@@ -59,17 +59,31 @@ echo "[cli-proxy] gh CLI configured to route through DIFC proxy at ${GH_HOST}"
 # Probe external DIFC proxy liveness before serving agent traffic.
 # If this fails, keep retries tightly bounded and fail startup early so
 # workflows do not enter long in-agent retry loops for connection-refused errors.
+#
+# Only connection-level failures (connection refused, TLS handshake errors,
+# timeouts) indicate the DIFC proxy is down. An HTTP-level response — including
+# error statuses such as "HTTP 403" — proves the proxy is reachable and
+# forwarding requests, so it is treated as a successful liveness check.
 MAX_LIVENESS_ATTEMPTS="${AWF_CLI_PROXY_LIVENESS_ATTEMPTS:-2}"
 LIVENESS_SLEEP_SECONDS="${AWF_CLI_PROXY_LIVENESS_SLEEP_SECONDS:-1}"
 LIVENESS_TIMEOUT_SECONDS="${AWF_CLI_PROXY_LIVENESS_TIMEOUT_SECONDS:-5}"
 ATTEMPT=1
 while [ "$ATTEMPT" -le "$MAX_LIVENESS_ATTEMPTS" ]; do
   PROBE_ERR=""
-  if PROBE_ERR="$(timeout "${LIVENESS_TIMEOUT_SECONDS}" gh api rate_limit 2>&1 >/dev/null)"; then
+  PROBE_EXIT=0
+  # Keep the assignment in a `||` list so `set -e` does not abort on a failing
+  # probe, and capture gh's real exit code (a bare `if ...; fi` would reset $?).
+  PROBE_ERR="$(timeout "${LIVENESS_TIMEOUT_SECONDS}" gh api rate_limit 2>&1 >/dev/null)" || PROBE_EXIT=$?
+  if [ "$PROBE_EXIT" -eq 0 ]; then
     echo "[cli-proxy] DIFC proxy liveness probe succeeded on attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS}"
     break
   fi
-  PROBE_EXIT=$?
+  # An HTTP status response (e.g. "gh: HTTP 403") means the proxy answered, so it
+  # is alive even if the request itself was denied. Accept it as reachable.
+  if printf '%s' "${PROBE_ERR}" | grep -qiE 'HTTP [0-9]{3}'; then
+    echo "[cli-proxy] DIFC proxy reachable on attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS} (proxy returned an HTTP response: ${PROBE_ERR})"
+    break
+  fi
   if [ "$ATTEMPT" -ge "$MAX_LIVENESS_ATTEMPTS" ]; then
     echo "[cli-proxy] ERROR: DIFC proxy liveness probe failed for ${GH_HOST} (gh api exit=${PROBE_EXIT})"
     if [ -n "${PROBE_ERR}" ]; then
