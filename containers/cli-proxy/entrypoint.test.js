@@ -70,9 +70,67 @@ function runProbe(ghStub) {
   }
 }
 
+/**
+ * Runs the probe loop with a per-attempt sequence of stub behaviours.
+ * The i-th entry in `stubs` is the bash snippet run on attempt i (0-indexed).
+ * Attempts beyond the stubs array length fall back to the last stub.
+ */
+function runProbeSequence(stubs) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-proxy-probe-'));
+  try {
+    const binDir = path.join(tmpDir, 'bin');
+    fs.mkdirSync(binDir);
+    const counterFile = path.join(tmpDir, 'counter');
+    fs.writeFileSync(counterFile, '0');
+
+    // Each invocation reads and increments the counter, then selects the stub.
+    const cases = stubs
+      .map((stub, i) => `${i}) ${stub} ;;`)
+      .join('\n  ');
+    const ghScript = [
+      '#!/bin/bash',
+      `COUNTER=$(cat "${counterFile}")`,
+      `echo $((COUNTER + 1)) > "${counterFile}"`,
+      'case "$COUNTER" in',
+      `  ${cases}`,
+      `  *) ${stubs[stubs.length - 1]} ;;`,
+      'esac',
+    ].join('\n');
+    fs.writeFileSync(path.join(binDir, 'gh'), ghScript, { mode: 0o755 });
+
+    const harness = [
+      'set -e',
+      'GH_HOST="localhost:18443"',
+      'MAX_LIVENESS_ATTEMPTS=2',
+      'LIVENESS_SLEEP_SECONDS=0',
+      'LIVENESS_TIMEOUT_SECONDS=5',
+      'ATTEMPT=1',
+      extractProbeLoop(),
+      'echo "PROBE_DONE"',
+    ].join('\n');
+
+    const stdout = execFileSync('bash', ['-c', harness], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    });
+    return { status: 0, stdout };
+  } catch (err) {
+    return { status: err.status ?? 1, stdout: (err.stdout || '').toString() };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 describe('cli-proxy liveness probe', () => {
   it('treats an HTTP 403 response as a reachable DIFC proxy and does not fail startup', () => {
     const { status, stdout } = runProbe('echo "gh: HTTP 403" >&2\nexit 1');
+    expect(status).toBe(0);
+    expect(stdout).toContain('DIFC proxy reachable');
+    expect(stdout).toContain('PROBE_DONE');
+  });
+
+  it('treats an HTTP 500 response as a reachable DIFC proxy', () => {
+    const { status, stdout } = runProbe('echo "gh: HTTP 500" >&2\nexit 1');
     expect(status).toBe(0);
     expect(stdout).toContain('DIFC proxy reachable');
     expect(stdout).toContain('PROBE_DONE');
@@ -91,5 +149,15 @@ describe('cli-proxy liveness probe', () => {
     expect(status).toBe(1);
     expect(stdout).toContain('DIFC proxy liveness probe failed');
     expect(stdout).not.toContain('PROBE_DONE');
+  });
+
+  it('succeeds when first attempt fails with connection error but second returns HTTP 403', () => {
+    const connRefused =
+      'echo "error connecting to localhost:18443: connect: connection refused" >&2\nexit 1';
+    const http403 = 'echo "gh: HTTP 403" >&2\nexit 1';
+    const { status, stdout } = runProbeSequence([connRefused, http403]);
+    expect(status).toBe(0);
+    expect(stdout).toContain('DIFC proxy reachable');
+    expect(stdout).toContain('PROBE_DONE');
   });
 });
