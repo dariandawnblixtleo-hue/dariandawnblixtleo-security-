@@ -20,9 +20,9 @@ engine:
     # PAT-based auth path. The sibling smoke-copilot workflow exercises the
     # copilot-requests:write OIDC path (org billing); this workflow validates
     # that the explicit COPILOT_GITHUB_TOKEN secret path still works through
-    # the api-proxy sidecar. The token is passed via engine.env so gh-aw's
-    # strict mode keeps it out of the agent container and routes it through
-    # the api-proxy credential injection layer.
+    # the api-proxy sidecar. The token is passed via engine.env and kept out of
+    # the agent container by the runner, then routed through the api-proxy
+    # credential injection layer.
     COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 network:
   allowed:
