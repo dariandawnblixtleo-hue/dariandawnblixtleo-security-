@@ -564,6 +564,25 @@ describe('agent service', () => {
     }
   });
 
+  it('should mount ${HOME}/work/_tool when runnerToolCachePath and RUNNER_TOOL_CACHE are unset', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-home-toolcache-'));
+    const toolcacheDir = path.join(fakeHome, 'work', '_tool');
+    fs.mkdirSync(toolcacheDir, { recursive: true });
+
+    try {
+      withEnv({ HOME: fakeHome, SUDO_USER: undefined, RUNNER_TOOL_CACHE: undefined }, () => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { runnerToolCachePath, ...configWithoutToolCache } = getConfig();
+        const result = generateDockerCompose(configWithoutToolCache, mockNetworkConfig);
+        const volumes = result.services.agent.volumes as string[];
+
+        expect(volumes).toContain(`${toolcacheDir}:/host${toolcacheDir}:ro`);
+      });
+    } finally {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   it('should skip .copilot bind mount when directory does not exist at non-standard HOME path', () => {
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-home-'));
 
