@@ -56,25 +56,43 @@ export GIT_SSL_CAINFO="${COMBINED_CA}"
 
 echo "[cli-proxy] gh CLI configured to route through DIFC proxy at ${GH_HOST}"
 
-# Probe external DIFC proxy liveness before serving agent traffic.
-# If this fails, keep retries tightly bounded and fail startup early so
-# workflows do not enter long in-agent retry loops for connection-refused errors.
-MAX_LIVENESS_ATTEMPTS="${AWF_CLI_PROXY_LIVENESS_ATTEMPTS:-2}"
-LIVENESS_SLEEP_SECONDS="${AWF_CLI_PROXY_LIVENESS_SLEEP_SECONDS:-1}"
+# Wait for the TCP tunnel to bind its port before probing the DIFC proxy.
+# The tunnel is started in the background; give it time to initialize and listen.
+TUNNEL_WAIT_ATTEMPTS="${AWF_CLI_PROXY_TUNNEL_WAIT_ATTEMPTS:-10}"
+TUNNEL_WAIT_SLEEP_SECONDS="${AWF_CLI_PROXY_TUNNEL_WAIT_SLEEP_SECONDS:-0.5}"
+TUNNEL_ATTEMPT=1
+while [ "$TUNNEL_ATTEMPT" -le "$TUNNEL_WAIT_ATTEMPTS" ]; do
+  if timeout 1 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/${DIFC_PORT}" 2>/dev/null; then
+    echo "[cli-proxy] TCP tunnel ready on localhost:${DIFC_PORT} (after ${TUNNEL_ATTEMPT} attempt(s))"
+    break
+  fi
+  if [ "$TUNNEL_ATTEMPT" -ge "$TUNNEL_WAIT_ATTEMPTS" ]; then
+    echo "[cli-proxy] ERROR: TCP tunnel failed to bind on localhost:${DIFC_PORT} after ${TUNNEL_WAIT_ATTEMPTS} attempts"
+    exit 1
+  fi
+  echo "[cli-proxy] Waiting for TCP tunnel on localhost:${DIFC_PORT} (attempt ${TUNNEL_ATTEMPT}/${TUNNEL_WAIT_ATTEMPTS})..."
+  sleep "${TUNNEL_WAIT_SLEEP_SECONDS}"
+  TUNNEL_ATTEMPT=$((TUNNEL_ATTEMPT + 1))
+done
+
+# Probe external DIFC proxy liveness before serving agent traffic using a TCP
+# connectivity check.  Using raw TCP (not `gh api rate_limit`) is more reliable:
+# it does not require a valid GH_TOKEN, is unaffected by gh CLI version changes,
+# and succeeds as long as the DIFC proxy's port is open regardless of how the
+# proxy routes API paths.  Fail startup early so workflows do not enter long
+# in-agent retry loops on connection-refused errors.
+MAX_LIVENESS_ATTEMPTS="${AWF_CLI_PROXY_LIVENESS_ATTEMPTS:-5}"
+LIVENESS_SLEEP_SECONDS="${AWF_CLI_PROXY_LIVENESS_SLEEP_SECONDS:-2}"
 LIVENESS_TIMEOUT_SECONDS="${AWF_CLI_PROXY_LIVENESS_TIMEOUT_SECONDS:-5}"
 ATTEMPT=1
 while [ "$ATTEMPT" -le "$MAX_LIVENESS_ATTEMPTS" ]; do
-  PROBE_ERR=""
-  if PROBE_ERR="$(timeout "${LIVENESS_TIMEOUT_SECONDS}" gh api rate_limit 2>&1 >/dev/null)"; then
+  if timeout "${LIVENESS_TIMEOUT_SECONDS}" bash -c "cat < /dev/null > /dev/tcp/${DIFC_HOST}/${DIFC_PORT}" 2>/dev/null; then
     echo "[cli-proxy] DIFC proxy liveness probe succeeded on attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS}"
     break
   fi
-  PROBE_EXIT=$?
   if [ "$ATTEMPT" -ge "$MAX_LIVENESS_ATTEMPTS" ]; then
-    echo "[cli-proxy] ERROR: DIFC proxy liveness probe failed for ${GH_HOST} (gh api exit=${PROBE_EXIT})"
-    if [ -n "${PROBE_ERR}" ]; then
-      echo "[cli-proxy] gh api error: ${PROBE_ERR}"
-    fi
+    echo "[cli-proxy] ERROR: DIFC proxy at ${DIFC_HOST}:${DIFC_PORT} is not reachable after ${MAX_LIVENESS_ATTEMPTS} attempts"
+    echo "[cli-proxy] Ensure the external DIFC proxy (mcpg) is running and accessible from the container"
     echo "[cli-proxy] Failing fast to avoid repeated in-agent retries"
     exit 1
   fi
