@@ -8,7 +8,7 @@ permissions:
   actions: read
   issues: read
   pull-requests: read
-max-turns: 4
+max-runs: 4
 engine:
   id: claude
   env:

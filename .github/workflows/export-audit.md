@@ -14,7 +14,7 @@ permissions:
   contents: read
   issues: read
 
-max-turns: 6
+max-runs: 6
 engine:
   id: claude
 sandbox:

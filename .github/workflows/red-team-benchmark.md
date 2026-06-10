@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
   issues: read
-max-turns: 8
+max-runs: 8
 engine:
   id: claude
   model: claude-haiku-4-5

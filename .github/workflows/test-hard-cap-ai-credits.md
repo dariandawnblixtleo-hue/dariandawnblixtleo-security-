@@ -15,7 +15,7 @@ name: Test Hard Cap AI Credits
 engine:
   id: copilot
   model: claude-opus-4.8
-max-turns: 200
+max-runs: 200
 network:
   allowed:
     - defaults

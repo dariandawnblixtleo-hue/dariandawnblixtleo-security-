@@ -9,7 +9,7 @@ permissions:
   contents: read
   pull-requests: read
   issues: read
-max-turns: 5
+max-runs: 5
 engine:
   id: claude
   model: claude-haiku-4-5

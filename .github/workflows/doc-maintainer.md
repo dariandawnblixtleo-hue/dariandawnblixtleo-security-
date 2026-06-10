@@ -50,7 +50,7 @@ jobs:
             echo "has_changes=$HAS_CHANGES"
             echo "skip_agent=$SKIP_AGENT"
           } >> "$GITHUB_OUTPUT"
-max-turns: 6
+max-runs: 6
 engine:
   id: claude
   model: claude-haiku-4-5

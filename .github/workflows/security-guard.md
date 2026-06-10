@@ -9,7 +9,7 @@ permissions:
   contents: read
   pull-requests: read
   issues: read
-max-turns: 6
+max-runs: 6
 engine:
   id: claude
   model: claude-sonnet-4-5
