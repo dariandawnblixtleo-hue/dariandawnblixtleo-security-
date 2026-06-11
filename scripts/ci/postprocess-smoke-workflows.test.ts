@@ -547,12 +547,15 @@ describe('issueDuplicationConclusionConcurrencyRegex', () => {
 // awf-config.json JSON string emitted by the gh-aw compiler.
 
 const apiProxyOpenRegex =
-  /"apiProxy":\{(?!"allowedModels"|"disallowedModels")/g;
+  /(\\?")apiProxy\1:\{(?!\\?"allowedModels|\\?"disallowedModels)/g;
 
 describe('apiProxyOpenRegex (smoke-model-policy injection)', () => {
-  const POLICY_FIELDS =
-    '"allowedModels":["*"],' +
-    '"disallowedModels":["*/awf-smoke-blocked-test-model*"],';
+  const replaceWith = (input: string): string =>
+    input.replace(apiProxyOpenRegex, (_m, q) =>
+      `${q}apiProxy${q}:{` +
+      `${q}allowedModels${q}:[${q}*${q}],` +
+      `${q}disallowedModels${q}:[${q}*/awf-smoke-blocked-test-model*${q}],`
+    );
 
   it('matches a fresh "apiProxy":{ block from the gh-aw compiler', () => {
     const input = '...,"apiProxy":{"enabled":true,"maxRuns":500},...';
@@ -560,12 +563,27 @@ describe('apiProxyOpenRegex (smoke-model-policy injection)', () => {
     expect(apiProxyOpenRegex.test(input)).toBe(true);
   });
 
+  it('matches the YAML-escaped \\"apiProxy\\":{ form emitted by gh-aw inside printf', () => {
+    const input = '...,\\"apiProxy\\":{\\"enabled\\":true,\\"maxRuns\\":500},...';
+    apiProxyOpenRegex.lastIndex = 0;
+    expect(apiProxyOpenRegex.test(input)).toBe(true);
+  });
+
   it('replaces "apiProxy":{ with the injected allow/deny fields', () => {
     const input = '"apiProxy":{"enabled":true,"maxRuns":500}';
     apiProxyOpenRegex.lastIndex = 0;
-    const output = input.replace(apiProxyOpenRegex, `"apiProxy":{${POLICY_FIELDS}`);
+    const output = replaceWith(input);
     expect(output).toBe(
       '"apiProxy":{"allowedModels":["*"],"disallowedModels":["*/awf-smoke-blocked-test-model*"],"enabled":true,"maxRuns":500}'
+    );
+  });
+
+  it('replaces the YAML-escaped \\"apiProxy\\":{ form preserving the escaping', () => {
+    const input = '\\"apiProxy\\":{\\"enabled\\":true}';
+    apiProxyOpenRegex.lastIndex = 0;
+    const output = replaceWith(input);
+    expect(output).toBe(
+      '\\"apiProxy\\":{\\"allowedModels\\":[\\"*\\"],\\"disallowedModels\\":[\\"*/awf-smoke-blocked-test-model*\\"],\\"enabled\\":true}'
     );
   });
 
@@ -577,6 +595,12 @@ describe('apiProxyOpenRegex (smoke-model-policy injection)', () => {
 
   it('is idempotent: skips a block that already starts with "disallowedModels"', () => {
     const input = '"apiProxy":{"disallowedModels":["x"],"enabled":true}';
+    apiProxyOpenRegex.lastIndex = 0;
+    expect(apiProxyOpenRegex.test(input)).toBe(false);
+  });
+
+  it('is idempotent for the YAML-escaped form too', () => {
+    const input = '\\"apiProxy\\":{\\"allowedModels\\":[\\"*\\"],\\"enabled\\":true}';
     apiProxyOpenRegex.lastIndex = 0;
     expect(apiProxyOpenRegex.test(input)).toBe(false);
   });

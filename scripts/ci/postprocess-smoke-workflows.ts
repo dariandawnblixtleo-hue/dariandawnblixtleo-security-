@@ -672,15 +672,22 @@ for (const workflowPath of workflowPaths) {
   // api-proxy for that pattern and asserts a 403 model_blocked_by_policy.
   const isModelPolicySmoke = workflowPath.includes('smoke-model-policy.lock.yml');
   if (isModelPolicySmoke) {
-    const policySentinel = '"disallowedModels":["*/awf-smoke-blocked-test-model*"]';
+    // In the compiled lock file, the awf-config.json is embedded inside a YAML
+    // double-quoted string passed to `printf`, so every JSON `"` is escaped as
+    // `\"`. Match both the escaped form (modern compiler) and the unescaped
+    // form (legacy / future compilers that might emit the JSON without YAML
+    // string escaping) so the post-process stays robust.
+    const policySentinel = 'awf-smoke-blocked-test-model';
     if (!content.includes(policySentinel)) {
-      const apiProxyOpenRegex = /"apiProxy":\{(?!"allowedModels"|"disallowedModels")/g;
+      const apiProxyOpenRegex =
+        /(\\?")apiProxy\1:\{(?!\\?"allowedModels|\\?"disallowedModels)/g;
       const matches = content.match(apiProxyOpenRegex);
       if (matches && matches.length > 0) {
-        const policyFields =
-          '"allowedModels":["*"],' +
-          '"disallowedModels":["*/awf-smoke-blocked-test-model*"],';
-        content = content.replace(apiProxyOpenRegex, `"apiProxy":{${policyFields}`);
+        content = content.replace(apiProxyOpenRegex, (match, q) =>
+          `${q}apiProxy${q}:{` +
+          `${q}allowedModels${q}:[${q}*${q}],` +
+          `${q}disallowedModels${q}:[${q}*/awf-smoke-blocked-test-model*${q}],`
+        );
         modified = true;
         console.log(
           `  Injected apiProxy.allowedModels/disallowedModels into ${matches.length} awf-config.json block(s)`
