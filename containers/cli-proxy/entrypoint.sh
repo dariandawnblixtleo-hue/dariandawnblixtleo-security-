@@ -56,6 +56,46 @@ export GIT_SSL_CAINFO="${COMBINED_CA}"
 
 echo "[cli-proxy] gh CLI configured to route through DIFC proxy at ${GH_HOST}"
 
+# Probe external DIFC proxy liveness before serving agent traffic.
+# Retries with exponential backoff to handle transient startup delays.
+# Distinct error messages help distinguish "not yet ready" from "unreachable".
+MAX_LIVENESS_ATTEMPTS="${AWF_CLI_PROXY_LIVENESS_ATTEMPTS:-10}"
+LIVENESS_SLEEP_SECONDS="${AWF_CLI_PROXY_LIVENESS_SLEEP_SECONDS:-1}"
+LIVENESS_TIMEOUT_SECONDS="${AWF_CLI_PROXY_LIVENESS_TIMEOUT_SECONDS:-5}"
+ATTEMPT=1
+while [ "$ATTEMPT" -le "$MAX_LIVENESS_ATTEMPTS" ]; do
+  PROBE_ERR=""
+  if PROBE_ERR="$(timeout "${LIVENESS_TIMEOUT_SECONDS}" gh api rate_limit 2>&1 >/dev/null)"; then
+    echo "[cli-proxy] DIFC proxy liveness probe succeeded on attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS}"
+    break
+  fi
+  PROBE_EXIT=$?
+  # Classify the failure for clearer diagnostics:
+  #   ECONNREFUSED (exit 7 for curl, or "connection refused" in gh output) → not yet ready
+  #   Timeout (exit 28 for curl, or "context deadline" in gh output)        → unreachable / slow
+  #   Other                                                                  → unknown / auth error
+  DIAG_TYPE="unknown"
+  if echo "${PROBE_ERR}" | grep -qiE "connection refused|ECONNREFUSED"; then
+    DIAG_TYPE="not-yet-ready (ECONNREFUSED)"
+  elif [ "${PROBE_EXIT}" -eq 124 ] || echo "${PROBE_ERR}" | grep -qiE "timeout|deadline|timed out"; then
+    DIAG_TYPE="unreachable (timeout)"
+  fi
+  if [ "$ATTEMPT" -ge "$MAX_LIVENESS_ATTEMPTS" ]; then
+    echo "[cli-proxy] ERROR: DIFC proxy liveness probe failed for ${GH_HOST} (gh api exit=${PROBE_EXIT}, diagnosis=${DIAG_TYPE})"
+    if [ -n "${PROBE_ERR}" ]; then
+      echo "[cli-proxy] gh api error: ${PROBE_ERR}"
+    fi
+    echo "[cli-proxy] Failing fast to avoid repeated in-agent retries"
+    exit 1
+  fi
+  # Exponential backoff: sleep 1, 2, 4, 8 … seconds (capped at 30s)
+  SLEEP_SECS=$(( LIVENESS_SLEEP_SECONDS * (1 << (ATTEMPT - 1)) ))
+  if [ "${SLEEP_SECS}" -gt 30 ]; then SLEEP_SECS=30; fi
+  echo "[cli-proxy] DIFC proxy probe failed (attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS}, diagnosis=${DIAG_TYPE}), retrying in ${SLEEP_SECS}s..."
+  sleep "${SLEEP_SECS}"
+  ATTEMPT=$((ATTEMPT + 1))
+done
+
 # Cleanup handler: stop the Node HTTP server and TCP tunnel on signal
 cleanup() {
   echo "[cli-proxy] Shutting down..."

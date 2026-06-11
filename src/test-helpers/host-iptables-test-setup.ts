@@ -40,8 +40,10 @@ const defaultExecaResult: ExecaMockResult = {
   all: undefined,
 };
 
+// ts-prune-ignore-next
 export const mockedExeca = execa as unknown as jest.MockedFunction<MockedExecaFn>;
 
+// ts-prune-ignore-next
 export function execaResult(overrides: Partial<ExecaMockResult> = {}): ExecaMockResult {
   return {
     ...defaultExecaResult,
@@ -49,10 +51,12 @@ export function execaResult(overrides: Partial<ExecaMockResult> = {}): ExecaMock
   };
 }
 
+// ts-prune-ignore-next
 export function execaError(message: string, stderr = message): ExecaMockError {
   return Object.assign(new Error(message), { stderr });
 }
 
+// ts-prune-ignore-next
 export function setupHostIptablesTestSuite(resetIpv6State: () => void): void {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -60,17 +64,57 @@ export function setupHostIptablesTestSuite(resetIpv6State: () => void): void {
   });
 }
 
+// ts-prune-ignore-next
 export function setupDefaultIptablesMocks(
   opts: {
     chainExists?: boolean;
     bridgeName?: string;
     catchAllStdout?: string;
+    /** Whether the DOCKER-USER jump rule already exists (controls iptables -C exit code). Default: false. */
+    dockerUserJumpRuleExists?: boolean;
   } = {}
 ): void {
-  const { chainExists = false, bridgeName = 'fw-bridge', catchAllStdout = '' } = opts;
+  const { chainExists = false, bridgeName = 'fw-bridge', catchAllStdout = '', dockerUserJumpRuleExists = false } = opts;
   mockedExeca
     .mockResolvedValueOnce(execaResult({ stdout: bridgeName, exitCode: 0 }))
     .mockResolvedValueOnce(execaResult({ stdout: '', exitCode: 0 }))
     .mockResolvedValueOnce(execaResult({ exitCode: chainExists ? 0 : 1 }));
-  mockedExeca.mockResolvedValue(execaResult({ stdout: catchAllStdout, exitCode: 0 }));
+  mockedExeca.mockImplementation(((cmd: string, args: readonly string[]) => {
+    if (cmd === 'iptables' && Array.isArray(args) && args.includes('-C')) {
+      return Promise.resolve(execaResult({ stdout: '', exitCode: dockerUserJumpRuleExists ? 0 : 1 }));
+    }
+    return Promise.resolve(execaResult({ stdout: catchAllStdout, exitCode: 0 }));
+  }) as MockedExecaFn);
+}
+
+// ts-prune-ignore-next
+export function setupDockerBridgeMock(opts: {
+  gateway?: string;
+  exitCode?: number;
+  stderr?: string;
+  error?: Error;
+} = {}): void {
+  const {
+    gateway = '172.17.0.1',
+    exitCode = 0,
+    stderr = '',
+    error,
+  } = opts;
+
+  const previousImplementation = mockedExeca.getMockImplementation();
+
+  const mockImplementation: MockedExecaFn = (cmd: string, args: readonly string[] = [], options?: unknown) => {
+    if (cmd === 'docker' && args.includes('bridge')) {
+      if (error) {
+        return Promise.reject(error);
+      }
+      return Promise.resolve(execaResult({ stdout: gateway, stderr, exitCode }));
+    }
+
+    return previousImplementation
+      ? previousImplementation(cmd, args, options)
+      : Promise.resolve(execaResult({ stdout: '', stderr: '', exitCode: 0 }));
+  };
+
+  mockedExeca.mockImplementation(mockImplementation);
 }

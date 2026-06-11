@@ -12,6 +12,7 @@ const {
   makeRes,
   getStructuredLogs,
   setupServerTestEnv,
+  flushPromises,
 } = require('./test-helpers/server-mock-factories');
 
 let proxyRequest;
@@ -55,7 +56,7 @@ describe('proxyRequest effective token guard', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns 429 with structured payload when effective token limit is reached', () => {
+  it('returns 429 with structured payload when effective token limit is reached', async () => {
     let responseHandler;
     const upstreamRequest = new EventEmitter();
     upstreamRequest.end = jest.fn();
@@ -71,6 +72,7 @@ describe('proxyRequest effective token guard', () => {
     const res1 = makeRes();
     proxyRequest(req1, res1, 'api.openai.com', { Authorization: 'Bearer token' }, 'openai');
     req1.emit('end');
+    await flushPromises();
 
     const proxyRes = new EventEmitter();
     proxyRes.statusCode = 200;
@@ -89,6 +91,7 @@ describe('proxyRequest effective token guard', () => {
     const res2 = makeRes();
     proxyRequest(req2, res2, 'api.openai.com', { Authorization: 'Bearer token' }, 'openai');
     req2.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res2.writeHead).toHaveBeenCalledWith(429, expect.objectContaining({
@@ -100,7 +103,7 @@ describe('proxyRequest effective token guard', () => {
     expect(payload.error.total_effective_tokens).toBeGreaterThanOrEqual(10);
   });
 
-  it('logs ai credits and effective tokens for each response usage update', () => {
+  it('logs ai credits for each response usage update', async () => {
     const writeSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     let responseHandler;
     const upstreamRequest = new EventEmitter();
@@ -116,6 +119,7 @@ describe('proxyRequest effective token guard', () => {
     const res = makeRes();
     proxyRequest(req, res, 'api.openai.com', { Authorization: '******' }, 'openai');
     req.emit('end');
+    await flushPromises();
 
     const proxyRes = new EventEmitter();
     proxyRes.statusCode = 200;
@@ -131,7 +135,6 @@ describe('proxyRequest effective token guard', () => {
     const budgetLogs = getStructuredLogs(writeSpy, 'token_budget_usage');
     expect(budgetLogs).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        effective_tokens_this_response: 3000,
         ai_credits_this_response: 0.125,
         ai_credits_total: 0.125,
       }),
@@ -158,7 +161,7 @@ describe('proxyRequest max-runs guard', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns 429 with structured payload when max runs limit is exceeded', () => {
+  it('returns 429 with structured payload when max runs limit is exceeded', async () => {
     let responseHandler;
     const upstreamRequest = new EventEmitter();
     upstreamRequest.end = jest.fn();
@@ -175,6 +178,7 @@ describe('proxyRequest max-runs guard', () => {
     const res1 = makeRes();
     proxyRequest(req1, res1, 'api.openai.com', { Authorization: 'Bearer token' }, 'openai');
     req1.emit('end');
+    await flushPromises();
 
     const proxyRes = new EventEmitter();
     proxyRes.statusCode = 200;
@@ -189,6 +193,7 @@ describe('proxyRequest max-runs guard', () => {
     const res2 = makeRes();
     proxyRequest(req2, res2, 'api.openai.com', { Authorization: 'Bearer token' }, 'openai');
     req2.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res2.writeHead).toHaveBeenCalledWith(429, expect.objectContaining({
@@ -200,7 +205,7 @@ describe('proxyRequest max-runs guard', () => {
     expect(payload.error.invocation_count).toBe(1);
   });
 
-  it('allows requests when max runs is not configured', () => {
+  it('allows requests when max runs is not configured', async () => {
     delete process.env.AWF_MAX_RUNS;
     resetMaxRunsGuardForTests();
 
@@ -215,6 +220,7 @@ describe('proxyRequest max-runs guard', () => {
     const res = makeRes();
     proxyRequest(req, res, 'api.openai.com', { Authorization: 'Bearer token' }, 'openai');
     req.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res.writeHead).not.toHaveBeenCalledWith(429, expect.anything());
@@ -240,7 +246,7 @@ describe('proxyRequest max-ai-credits guard', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns 429 with structured payload when ai credits limit is reached', () => {
+  it('returns 429 with structured payload when ai credits limit is reached', async () => {
     let responseHandler;
     const upstreamRequest = new EventEmitter();
     upstreamRequest.end = jest.fn();
@@ -256,6 +262,7 @@ describe('proxyRequest max-ai-credits guard', () => {
     const res1 = makeRes();
     proxyRequest(req1, res1, 'api.openai.com', { Authorization: '******' }, 'openai');
     req1.emit('end');
+    await flushPromises();
 
     const proxyRes = new EventEmitter();
     proxyRes.statusCode = 200;
@@ -273,6 +280,7 @@ describe('proxyRequest max-ai-credits guard', () => {
     const res2 = makeRes();
     proxyRequest(req2, res2, 'api.openai.com', { Authorization: '******' }, 'openai');
     req2.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res2.writeHead).toHaveBeenCalledWith(429, expect.objectContaining({
@@ -301,7 +309,7 @@ describe('proxyRequest permission-denied guard', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns 403 with structured payload when permission denied limit is exceeded', () => {
+  it('returns 403 with structured payload when permission denied limit is exceeded', async () => {
     let responseHandler;
     const upstreamRequest = new EventEmitter();
     upstreamRequest.end = jest.fn();
@@ -318,6 +326,7 @@ describe('proxyRequest permission-denied guard', () => {
     const res1 = makeRes();
     proxyRequest(req1, res1, 'api.openai.com', { Authorization: '******' }, 'openai');
     req1.emit('end');
+    await flushPromises();
 
     const proxyRes = new EventEmitter();
     proxyRes.statusCode = 403;
@@ -332,6 +341,7 @@ describe('proxyRequest permission-denied guard', () => {
     const res2 = makeRes();
     proxyRequest(req2, res2, 'api.openai.com', { Authorization: '******' }, 'openai');
     req2.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res2.writeHead).toHaveBeenCalledWith(403, expect.objectContaining({
@@ -343,7 +353,7 @@ describe('proxyRequest permission-denied guard', () => {
     expect(payload.error.denied_count).toBe(1);
   });
 
-  it('also triggers on 401 upstream responses', () => {
+  it('also triggers on 401 upstream responses', async () => {
     let responseHandler;
     const upstreamRequest = new EventEmitter();
     upstreamRequest.end = jest.fn();
@@ -359,6 +369,7 @@ describe('proxyRequest permission-denied guard', () => {
     const res1 = makeRes();
     proxyRequest(req1, res1, 'api.openai.com', { Authorization: '******' }, 'openai');
     req1.emit('end');
+    await flushPromises();
 
     const proxyRes = new EventEmitter();
     proxyRes.statusCode = 401;
@@ -372,13 +383,14 @@ describe('proxyRequest permission-denied guard', () => {
     const res2 = makeRes();
     proxyRequest(req2, res2, 'api.openai.com', { Authorization: '******' }, 'openai');
     req2.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(res2.end.mock.calls[0][0]);
     expect(payload.error.type).toBe('permission_denied_limit_exceeded');
   });
 
-  it('allows requests when permission denied limit is not configured', () => {
+  it('allows requests when permission denied limit is not configured', async () => {
     delete process.env.AWF_MAX_PERMISSION_DENIED;
     resetPermissionDeniedGuardForTests();
 
@@ -393,6 +405,7 @@ describe('proxyRequest permission-denied guard', () => {
     const res = makeRes();
     proxyRequest(req, res, 'api.openai.com', { Authorization: '******' }, 'openai');
     req.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res.writeHead).not.toHaveBeenCalledWith(403, expect.anything());
@@ -429,7 +442,7 @@ describe('proxyRequest max-model-multiplier guard', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns 400 when the requested model multiplier exceeds the cap', () => {
+  it('returns 400 when the requested model multiplier exceeds the cap', async () => {
     jest.spyOn(https, 'request').mockImplementation(() => {
       const r = new EventEmitter();
       r.end = jest.fn();
@@ -442,6 +455,7 @@ describe('proxyRequest max-model-multiplier guard', () => {
     const res = makeRes();
     proxyRequest(req, res, 'api.anthropic.com', { 'x-api-key': 'sk-ant-test' }, 'anthropic');
     req.emit('end');
+    await flushPromises();
 
     expect(https.request).not.toHaveBeenCalled();
     expect(res.writeHead).toHaveBeenCalledWith(400, expect.objectContaining({
@@ -454,7 +468,7 @@ describe('proxyRequest max-model-multiplier guard', () => {
     expect(payload.error.max_model_multiplier).toBe(5);
   });
 
-  it('allows requests when the model multiplier is within the cap', () => {
+  it('allows requests when the model multiplier is within the cap', async () => {
     const upstreamRequest = new EventEmitter();
     upstreamRequest.end = jest.fn();
     upstreamRequest.write = jest.fn();
@@ -466,12 +480,13 @@ describe('proxyRequest max-model-multiplier guard', () => {
     const res = makeRes();
     proxyRequest(req, res, 'api.openai.com', { Authorization: '******' }, 'openai');
     req.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res.writeHead).not.toHaveBeenCalledWith(400, expect.anything());
   });
 
-  it('allows requests when AWF_MAX_MODEL_MULTIPLIER is not configured', () => {
+  it('allows requests when AWF_MAX_MODEL_MULTIPLIER is not configured', async () => {
     delete process.env.AWF_MAX_MODEL_MULTIPLIER;
     resetMaxModelMultiplierGuardForTests();
 
@@ -486,6 +501,26 @@ describe('proxyRequest max-model-multiplier guard', () => {
     const res = makeRes();
     proxyRequest(req, res, 'api.anthropic.com', { 'x-api-key': 'sk-ant-test' }, 'anthropic');
     req.emit('end');
+    await flushPromises();
+
+    expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
+    expect(res.writeHead).not.toHaveBeenCalledWith(400, expect.anything());
+  });
+
+  it('does not enforce model multiplier guard on GET requests', async () => {
+    const upstreamRequest = new EventEmitter();
+    upstreamRequest.end = jest.fn();
+    upstreamRequest.write = jest.fn();
+    upstreamRequest.destroy = jest.fn();
+    const httpsRequestSpy = jest.spyOn(https, 'request').mockImplementation(() => upstreamRequest);
+
+    const body = JSON.stringify({ model: 'claude-opus-4.7', messages: [] });
+    const req = makeModelReq(body);
+    req.method = 'GET';
+    const res = makeRes();
+    proxyRequest(req, res, 'api.anthropic.com', { 'x-api-key': 'sk-ant-test' }, 'anthropic');
+    req.emit('end');
+    await flushPromises();
 
     expect(httpsRequestSpy).toHaveBeenCalledTimes(1);
     expect(res.writeHead).not.toHaveBeenCalledWith(400, expect.anything());

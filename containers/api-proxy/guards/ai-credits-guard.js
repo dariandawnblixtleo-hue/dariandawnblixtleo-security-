@@ -2,11 +2,17 @@
 
 const { logRequest, sanitizeForLog } = require('../logging');
 const pricingByModel = require('../ai-credits-pricing');
+const { resolveCatalogModel } = require('../models-dev-catalog');
 const { parsePositiveNumber } = require('./guard-utils');
 
 const TOKENS_PER_MILLION = 1_000_000;
 const DOLLARS_PER_CREDIT = 0.01;
 const CREDIT_DENOMINATOR = TOKENS_PER_MILLION * DOLLARS_PER_CREDIT;
+
+// Absolute hard cap on AI credits that cannot be overridden by configuration.
+// This is a safety limit to prevent runaway spending regardless of what
+// maxAiCredits is set to via CLI flags or config files.
+const HARD_CAP_AI_CREDITS = 10_000;
 
 function roundCredits(value) {
   return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000;
@@ -24,33 +30,81 @@ let aiCreditsState = createAiCreditsState();
 
 const aiCreditsConfigCache = {
   rawMax: undefined,
-  parsed: { max: null },
+  rawDefault: undefined,
+  parsed: { max: null, defaultPricing: null },
 };
 
 function getAiCreditsConfig() {
   const rawMax = process.env.AWF_MAX_AI_CREDITS;
-  if (aiCreditsConfigCache.rawMax === rawMax) {
+  const rawDefault = process.env.AWF_DEFAULT_AI_CREDITS_PRICING;
+  if (aiCreditsConfigCache.rawMax === rawMax && aiCreditsConfigCache.rawDefault === rawDefault) {
     return aiCreditsConfigCache.parsed;
   }
   aiCreditsConfigCache.rawMax = rawMax;
+  aiCreditsConfigCache.rawDefault = rawDefault;
+
+  let defaultPricing = null;
+  if (rawDefault) {
+    try {
+      const parsed = JSON.parse(rawDefault);
+      if (parsed && typeof parsed.input === 'number' && typeof parsed.output === 'number') {
+        defaultPricing = {
+          input: parsed.input,
+          cachedInput: parsed.cachedInput ?? parsed.input * 0.1,
+          cacheWrite: parsed.cacheWrite ?? null,
+          output: parsed.output,
+        };
+      }
+    } catch { /* invalid JSON — leave null */ }
+  }
+
+  const parsedMax = parsePositiveNumber(rawMax);
   aiCreditsConfigCache.parsed = {
-    max: parsePositiveNumber(rawMax),
+    max: parsedMax ? Math.min(parsedMax, HARD_CAP_AI_CREDITS) : null,
+    defaultPricing,
   };
   return aiCreditsConfigCache.parsed;
+}
+
+/**
+ * Canonicalize a model name by stripping provider prefix and normalizing
+ * common deployment suffixes and separators (dash, dot, underscore are all
+ * treated as equivalent).
+ * E.g. "copilot/claude-sonnet-4.6" → "claude-sonnet-4-6"
+ *      "claude_sonnet_4_6"          → "claude-sonnet-4-6"
+ *      "gpt-5-codex-mini-alpha-2025-11-07" → "gpt-5-codex-mini"
+ */
+function canonicalizeModel(model) {
+  const bare = model.includes('/') ? model.slice(model.indexOf('/') + 1) : model;
+  const withoutDateSuffix = bare.replace(/(-alpha)?-(\d{4}-\d{2}-\d{2}|\d{8})$/, '');
+  return withoutDateSuffix.replace(/[._]/g, '-');
 }
 
 function resolveModelPricing(model, state = aiCreditsState) {
   if (Object.hasOwn(pricingByModel, model)) return pricingByModel[model];
 
+  const canonical = canonicalizeModel(model);
+
+  // Try canonical form against canonicalized pricing keys
+  for (const [configuredModel, pricing] of Object.entries(pricingByModel)) {
+    const canonicalKey = canonicalizeModel(configuredModel);
+    if (canonical === canonicalKey) return pricing;
+  }
+
+  // Prefix match: canonical model starts with a canonical pricing key
   let prefixMatch = null;
   for (const [configuredModel, pricing] of Object.entries(pricingByModel)) {
-    if (model.startsWith(`${configuredModel}-`)) {
-      if (!prefixMatch || configuredModel.length > prefixMatch.model.length) {
-        prefixMatch = { model: configuredModel, pricing };
+    const canonicalKey = canonicalizeModel(configuredModel);
+    if (canonical.startsWith(`${canonicalKey}-`)) {
+      if (!prefixMatch || canonicalKey.length > prefixMatch.key.length) {
+        prefixMatch = { key: canonicalKey, pricing };
       }
     }
   }
   if (prefixMatch) return prefixMatch.pricing;
+
+  const catalogModel = resolveCatalogModel(model);
+  if (catalogModel.pricing) return catalogModel.pricing;
 
   if (!state.warnedUnknownModels.has(model)) {
     logRequest('warn', 'unknown_model_ai_credits_pricing', {
@@ -58,7 +112,41 @@ function resolveModelPricing(model, state = aiCreditsState) {
     });
     state.warnedUnknownModels.add(model);
   }
+
+  // Fall back to configured default pricing if available
+  const config = getAiCreditsConfig();
+  if (config.defaultPricing) return config.defaultPricing;
+
   return null;
+}
+
+/**
+ * Check if a model is unresolvable and should be rejected.
+ * Only rejects when maxAiCredits is active and no default pricing is configured.
+ *
+ * @param {string} model
+ * @returns {{ rejected: boolean, model: string, error: object } | null}
+ */
+function checkUnknownModelRejection(model) {
+  const config = getAiCreditsConfig();
+  if (!config.max) return null; // guard not active, don't reject
+  if (!model) return null; // no model in request body, can't check
+  if (config.defaultPricing) return null; // has fallback, don't reject
+
+  const pricing = resolveModelPricing(model);
+  if (pricing) return null; // model resolved, don't reject
+
+  return {
+    rejected: true,
+    model,
+    error: {
+      type: 'unknown_model_ai_credits',
+      message: `Model "${model}" has no AI credits pricing and no default pricing is configured. ` +
+        'Set apiProxy.defaultAiCreditsPricing in the AWF config (e.g. {"input": 3.0, "output": 15.0}) ' +
+        'to provide a fallback rate, or add the model to the pricing table.',
+      model,
+    },
+  };
 }
 
 function calculateAiCredits(normalizedUsage, model, state = aiCreditsState) {
@@ -137,8 +225,19 @@ function getAiCreditsReflectState() {
 
 function getAiCreditsBlockState() {
   const config = getAiCreditsConfig();
-  if (!config.max) return null;
   const roundedTotalAiCredits = roundCredits(aiCreditsState.totalAiCredits);
+
+  // Hard cap always applies, regardless of config
+  if (roundedTotalAiCredits >= HARD_CAP_AI_CREDITS) {
+    return {
+      maxAiCredits: HARD_CAP_AI_CREDITS,
+      totalAiCredits: roundedTotalAiCredits,
+      maxExceeded: true,
+      hardCap: true,
+    };
+  }
+
+  if (!config.max) return null;
   return {
     maxAiCredits: config.max,
     totalAiCredits: roundedTotalAiCredits,
@@ -147,12 +246,16 @@ function getAiCreditsBlockState() {
 }
 
 function buildAiCreditsLimitError(aiCreditsBlockState) {
+  const isHardCap = aiCreditsBlockState.hardCap === true;
   return {
     error: {
       type: 'ai_credits_limit_exceeded',
-      message: `Maximum AI credits exceeded (${aiCreditsBlockState.totalAiCredits.toFixed(6)} / ${aiCreditsBlockState.maxAiCredits}).`,
+      message: isHardCap
+        ? `Hard cap on AI credits reached (${aiCreditsBlockState.totalAiCredits.toFixed(6)} / ${aiCreditsBlockState.maxAiCredits}). This limit cannot be overridden.`
+        : `Maximum AI credits exceeded (${aiCreditsBlockState.totalAiCredits.toFixed(6)} / ${aiCreditsBlockState.maxAiCredits}).`,
       total_ai_credits: aiCreditsBlockState.totalAiCredits,
       max_ai_credits: aiCreditsBlockState.maxAiCredits,
+      hard_cap: isHardCap,
     },
   };
 }
@@ -160,14 +263,18 @@ function buildAiCreditsLimitError(aiCreditsBlockState) {
 function resetAiCreditsGuardForTests() {
   aiCreditsState = createAiCreditsState();
   aiCreditsConfigCache.rawMax = undefined;
-  aiCreditsConfigCache.parsed = { max: null };
+  aiCreditsConfigCache.rawDefault = undefined;
+  aiCreditsConfigCache.parsed = { max: null, defaultPricing: null };
   delete process.env.AWF_AI_CREDITS_USED;
 }
 
 module.exports = {
+  HARD_CAP_AI_CREDITS,
   applyAiCreditsUsage,
   getAiCreditsReflectState,
   getAiCreditsBlockState,
   buildAiCreditsLimitError,
+  checkUnknownModelRejection,
+  canonicalizeModel,
   resetAiCreditsGuardForTests,
 };

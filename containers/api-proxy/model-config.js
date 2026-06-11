@@ -1,9 +1,10 @@
 'use strict';
 
-const { parseModelAliases, parseModelGlobList, normalizeModelPolicy, rewriteModelInBody, filterResolvableAliases } = require('./model-resolver');
+const { parseModelAliases, parseModelGlobList, normalizeModelPolicy, filterResolvableAliases } = require('./model-resolver');
+const { rewriteModelInBody } = require('./model-body-rewriter');
 const { sanitizeForLog, logRequest } = require('./logging');
 const { diag } = require('./token-persistence');
-const { getCopilotModelFallbackPolicy } = require('./providers/copilot');
+const { getCopilotModelFallbackPolicy } = require('./providers/copilot-auth');
 
 const MODEL_ALIASES_RAW = (process.env.AWF_MODEL_ALIASES || '').trim() || undefined;
 const MODEL_ALIASES = parseModelAliases(MODEL_ALIASES_RAW);

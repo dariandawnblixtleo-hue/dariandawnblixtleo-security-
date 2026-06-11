@@ -19,9 +19,12 @@ interface AwfFileConfig {
     anthropicCacheTailTtl?: string;
     maxEffectiveTokens?: number;
     maxAiCredits?: number;
+    defaultAiCreditsPricing?: { input: number; output: number; cachedInput?: number; cacheWrite?: number | null };
     modelMultipliers?: Record<string, number>;
     defaultModelMultiplier?: number;
     maxModelMultiplierCap?: number;
+    maxTurns?: number;
+    /** @deprecated Use maxTurns instead */
     maxRuns?: number;
     maxPermissionDenied?: number;
     requestedModel?: string;
@@ -84,6 +87,24 @@ interface AwfFileConfig {
     dockerHost?: string;
     dockerHostPathPrefix?: string;
     runnerToolCachePath?: string;
+  };
+  chroot?: {
+    binariesSourcePath?: string;
+    identity?: {
+      home?: string;
+      user?: string;
+      uid?: number;
+      gid?: number;
+    };
+  };
+  dind?: {
+    preStageDirs?: boolean;
+    workDir?: string;
+    stagingImage?: string;
+    stageEngineBinary?: {
+      path?: string;
+      targetPath?: string;
+    };
   };
   environment?: {
     envFile?: string;
@@ -202,10 +223,11 @@ export function mapAwfFileConfigToCliOptions(config: AwfFileConfig): Record<stri
     anthropicCacheTailTtl: config.apiProxy?.anthropicCacheTailTtl as '5m' | '1h' | undefined,
     maxEffectiveTokens: config.apiProxy?.maxEffectiveTokens,
     maxAiCredits: config.apiProxy?.maxAiCredits,
+    defaultAiCreditsPricing: config.apiProxy?.defaultAiCreditsPricing,
     effectiveTokenModelMultipliers: config.apiProxy?.modelMultipliers,
     effectiveTokenDefaultModelMultiplier: config.apiProxy?.defaultModelMultiplier,
     maxModelMultiplierCap: config.apiProxy?.maxModelMultiplierCap,
-    maxRuns: config.apiProxy?.maxRuns,
+    maxRuns: config.apiProxy?.maxTurns ?? config.apiProxy?.maxRuns,
     maxPermissionDenied: config.apiProxy?.maxPermissionDenied,
     requestedModel: config.apiProxy?.requestedModel,
     modelFallback: config.apiProxy?.modelFallback,
@@ -252,6 +274,16 @@ export function mapAwfFileConfigToCliOptions(config: AwfFileConfig): Record<stri
     dockerHost: config.container?.dockerHost,
     dockerHostPathPrefix: config.container?.dockerHostPathPrefix,
     runnerToolCachePath: config.container?.runnerToolCachePath,
+    chrootBinariesSourcePath: config.chroot?.binariesSourcePath,
+    chrootIdentityHome: config.chroot?.identity?.home,
+    chrootIdentityUser: config.chroot?.identity?.user,
+    chrootIdentityUid: toStringIfDefined(config.chroot?.identity?.uid),
+    chrootIdentityGid: toStringIfDefined(config.chroot?.identity?.gid),
+    dindPreStageDirs: config.dind?.preStageDirs,
+    dindWorkDir: config.dind?.workDir,
+    dindStagingImage: config.dind?.stagingImage,
+    dindStageEngineBinaryPath: config.dind?.stageEngineBinary?.path,
+    dindStageEngineBinaryTargetPath: config.dind?.stageEngineBinary?.targetPath,
 
     envFile: config.environment?.envFile,
     envAll: config.environment?.envAll,

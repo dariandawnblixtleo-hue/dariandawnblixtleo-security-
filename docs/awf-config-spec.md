@@ -90,6 +90,10 @@ Tools generating AWF invocations (such as `gh-aw`) SHOULD use the mapping
 below. The left side is the configuration-document path; the right side is
 the corresponding CLI flag.
 
+Security-sensitive values (API keys, tokens, and credential secrets) MUST be
+provided via environment variables, not AWF config documents. Non-sensitive
+AWF settings MAY be supplied via config files, including stdin (`--config -`).
+
 - `network.allowDomains[]` → `--allow-domains <csv>`
 - `network.blockDomains[]` → `--block-domains <csv>`
 - `network.dnsServers[]` → `--dns-servers <csv>`
@@ -99,9 +103,12 @@ the corresponding CLI flag.
 - `apiProxy.anthropicAutoCache` → `--anthropic-auto-cache`
 - `apiProxy.anthropicCacheTailTtl` → `--anthropic-cache-tail-ttl <5m|1h>`
 - `apiProxy.maxEffectiveTokens` → *(config-only; no CLI equivalent)*
+- `apiProxy.maxAiCredits` → *(config-only; maps to `AWF_MAX_AI_CREDITS`)*
+- `apiProxy.defaultAiCreditsPricing` → *(config-only; maps to `AWF_DEFAULT_AI_CREDITS_PRICING`)*
 - `apiProxy.modelMultipliers` → `--max-model-multiplier <model:multiplier,...>`
 - `apiProxy.defaultModelMultiplier` → *(config-only; maps to `AWF_EFFECTIVE_TOKEN_DEFAULT_MODEL_MULTIPLIER`)*
-- `apiProxy.maxRuns` → *(config-only; no CLI equivalent)*
+- `apiProxy.maxTurns` → *(config-only; no CLI equivalent)*
+- `apiProxy.maxRuns` → *(deprecated alias for `maxTurns`; maps to `AWF_MAX_RUNS`)*
 - `apiProxy.maxModelMultiplierCap` → `--max-model-multiplier-cap <number>`
 - `apiProxy.maxPermissionDenied` → `--max-permission-denied <number>`
 - `apiProxy.requestedModel` → *(config-only; maps to `AWF_REQUESTED_MODEL` for pre-startup validation)*
@@ -113,6 +120,8 @@ the corresponding CLI flag.
 - `apiProxy.disallowedModels` → *(config-only; maps to `AWF_DISALLOWED_MODELS` — provider-scoped glob denylist)*
 - `apiProxy.logging.debugTokens` → *(config-only; maps to `AWF_DEBUG_TOKENS`)*
 - `apiProxy.logging.tokenLogDir` → *(config-only; maps to `AWF_TOKEN_LOG_DIR`)*
+- `apiProxy.diagnostics.captureBlockedRequests` → *(config-only; maps to `AWF_CAPTURE_BLOCKED_LLM_REQUESTS`)*
+- `apiProxy.diagnostics.maxCapturedBytes` → *(config-only; maps to `AWF_MAX_BLOCKED_CAPTURE_BYTES`)*
 - `apiProxy.auth.type` → *(config-only; maps to `AWF_AUTH_TYPE`)*
 - `apiProxy.auth.provider` → *(config-only; maps to `AWF_AUTH_PROVIDER`)*
 - `apiProxy.auth.oidcAudience` → *(config-only; maps to `AWF_AUTH_OIDC_AUDIENCE`)*
@@ -164,6 +173,16 @@ the corresponding CLI flag.
 - `container.dockerHost` → `--docker-host`
 - `container.dockerHostPathPrefix` → `--docker-host-path-prefix`
 - `container.runnerToolCachePath` → *(config-only; checked first for optional read-only runner tool cache mount, before `RUNNER_TOOL_CACHE` and `/home/runner/work/_tool` auto-detection)*
+- `chroot.binariesSourcePath` → *(config-only; overlays a runner-side binaries directory at `/usr/local/bin` inside chroot mode)*
+- `chroot.identity.home` → *(config-only; forwarded as `AWF_CHROOT_IDENTITY_HOME` and applied after chroot pivot)*
+- `chroot.identity.user` → *(config-only; forwarded as `AWF_CHROOT_IDENTITY_USER` and applied to `USER`/`LOGNAME` after chroot pivot)*
+- `chroot.identity.uid` → *(config-only; forwarded as `AWF_CHROOT_IDENTITY_UID` for chroot user mapping)*
+- `chroot.identity.gid` → *(config-only; forwarded as `AWF_CHROOT_IDENTITY_GID` for chroot user mapping)*
+- `dind.preStageDirs` → *(config-only; enables daemon-side pre-staging of the DinD work directory tree before compose startup)*
+- `dind.workDir` → *(config-only; daemon-visible staging root, default `/tmp/gh-aw`)*
+- `dind.stagingImage` → *(config-only; image used for short-lived DinD staging containers)*
+- `dind.stageEngineBinary.path` → *(config-only; runner-side engine binary source path for DinD staging)*
+- `dind.stageEngineBinary.targetPath` → *(config-only; daemon-side destination path for staged engine binary)*
 - `environment.envFile` → `--env-file`
 - `environment.envAll` → `--env-all`
 - `environment.excludeEnv[]` → `--exclude-env` *(repeatable)*
@@ -178,6 +197,8 @@ the corresponding CLI flag.
 - `rateLimiting.bytesPerMinute` → `--rate-limit-bytes-pm`
 
 When `container.dockerHostPathPrefix` points at a daemon-visible shared `/tmp` path, the implementation stages the invoking CLI binary together with `/etc/passwd`, `/etc/group`, and the generated chroot `/etc/hosts` under that shared path so chroot mode can bootstrap on split-filesystem ARC/DinD hosts.
+
+When DinD is detected, AWF preserves the detected `DOCKER_HOST` value for the agent environment (including MCP servers) so DinD-aware tooling can reach the correct daemon without manual workflow env overrides.
 
 The following CLI flag has no config-file equivalent by design:
 
@@ -691,25 +712,6 @@ The API proxy exposes a `GET /reflect` endpoint on every provider port
 (10000, OpenAI) serves `/metrics` and the aggregate `/health`; non-management
 ports still serve provider-local `/health` responses.
 
-When the `/reflect` endpoint is queried, the response MUST include the
-current effective-token state:
-
-```json
-{
-  "effective_tokens": {
-    "enabled": true,
-    "max_effective_tokens": 1000,
-    "total_effective_tokens": 456.78,
-    "remaining_effective_tokens": 543.22,
-    "percent_used": 45.68,
-    "thresholds_crossed": []
-  }
-}
-```
-
-When `maxEffectiveTokens` is not configured, the `enabled` field MUST be
-`false` and numeric fields MUST be `0` or `null`.
-
 ### 10.7 Max AI Credits Configuration
 
 `maxAiCredits` is a positive number. It is supplied via the AWF config file
@@ -722,11 +724,92 @@ configured `maxEffectiveTokens` budget. Once cumulative AI credits reach or
 exceed `maxAiCredits`, subsequent requests MUST be rejected with HTTP `429`
 and error type `ai_credits_limit_exceeded`.
 
+Regardless of `maxAiCredits` configuration, AWF also enforces a non-overridable
+hard cap of **10,000 AI credits**. When cumulative AI credits reach this hard
+cap, subsequent requests MUST be rejected with HTTP `429` and error type
+`ai_credits_limit_exceeded`, and the error/log payload MUST include
+`hard_cap: true`.
+
+If both limits are present, the effective enforcement threshold is the lower of:
+- configured `maxAiCredits`
+- the fixed hard cap (10,000)
+
+Setting `maxAiCredits` above 10,000 MUST NOT raise the effective limit.
+
+### 10.7.1 Model Name Resolution for Pricing
+
+The AI credits guard resolves model names using a two-step lookup:
+
+1. **Curated pricing table** — a built-in table of known models with exact pricing.
+2. **Bundled models.dev catalog** — a bundled snapshot of the models.dev catalog used as a fallback when the model is not found in the curated table.
+
+Model names are **canonicalized** before lookup: provider prefixes
+(e.g. `copilot/`) are stripped, and separators (`.`, `_`, `-`) are treated
+as interchangeable. For example, `copilot/claude-sonnet-4.6`,
+`claude_sonnet_4_6`, and `claude-sonnet-4-6` all resolve to the same pricing
+entry.
+
+If neither source resolves the model, the `defaultAiCreditsPricing` fallback
+(if configured) is used. If that is also absent, the request is rejected.
+Models whose catalog entry carries zero-cost pricing are recognized as known
+models with zero AI credit impact, so they are never rejected as "unknown".
+
+### 10.7.2 Default AI Credits Pricing (Fallback)
+
+`defaultAiCreditsPricing` is an optional object with `input` and `output`
+fields (both required, in $/1M tokens), plus optional `cachedInput` and
+`cacheWrite` fields.
+
+It is supplied via the AWF config file and maps to the
+`AWF_DEFAULT_AI_CREDITS_PRICING` environment variable (JSON string) injected
+into the api-proxy container.
+
+When configured, any model not found in the curated built-in pricing table or
+the bundled models.dev catalog uses these rates as a fallback for AI credits
+calculation.
+
+### 10.7.3 Unknown Model Rejection
+
+When `maxAiCredits` is active and the proxy encounters a request whose model
+cannot be resolved from the curated built-in pricing table or the bundled
+models.dev catalog:
+
+1. **If `defaultAiCreditsPricing` is configured**: the fallback rates are used
+   and the request proceeds normally.
+
+2. **If `defaultAiCreditsPricing` is NOT configured**: the proxy MUST reject
+   the request with HTTP `400` and error type `unknown_model_ai_credits`. The
+   error payload includes:
+   - `model`: the unresolved model name
+   - `message`: human-readable instructions to configure
+     `apiProxy.defaultAiCreditsPricing`
+
+   This fail-closed behavior prevents unaccounted spending from models whose
+   pricing is unknown to the proxy.
+
+Note: Requests without a `model` field in the body (e.g. non-chat endpoints)
+are not subject to this check.
+
+### 10.7.4 Token Usage JSONL Schema Extensions
+
+When AI credits and/or effective tokens are computed, the `token-usage.jsonl`
+records include additional optional fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `effective_tokens_this_response` | number | Weighted tokens for this request |
+| `effective_tokens_total` | number | Running total of effective tokens |
+| `model_multiplier` | number | Cost multiplier applied for this model |
+| `ai_credits_this_response` | number | AI credits consumed by this request |
+| `ai_credits_total` | number | Running total of AI credits |
+
+These fields are only present when the respective guard is active.
+
 ## 11. Max-Runs Enforcement
 
 *This section is normative.*
 
-When `apiProxy.maxRuns` is configured, the API proxy MUST enforce an absolute
+When `apiProxy.maxTurns` is configured, the API proxy MUST enforce an absolute
 maximum number of LLM invocations per run.
 
 ### 11.1 Counting Invocations
@@ -741,7 +824,7 @@ The API proxy MUST enforce the max-runs limit as follows:
 
 1. **Pre-request check**: Before forwarding each request to the upstream
    provider, the proxy checks whether the invocation count has reached or
-   exceeded `maxRuns`.
+   exceeded `maxTurns`.
 
 2. **Rejection**: When the limit is reached or exceeded, the proxy MUST reject
    the request with:
@@ -782,7 +865,7 @@ The `/reflect` endpoint (available on all provider ports 10000–10003; see
 }
 ```
 
-When `maxRuns` is not configured, the `enabled` field MUST be `false` and
+When `maxTurns` is not configured, the `enabled` field MUST be `false` and
 `max_runs` and `remaining_runs` MUST be `null`.
 
 ## 11a. Permission-Denied Guard
@@ -1214,12 +1297,17 @@ apiProxy:
   logging:
     debugTokens: true
     tokenLogDir: "/var/log/api-proxy"
+  diagnostics:
+    captureBlockedRequests: summary  # false | summary | redacted | full
+    maxCapturedBytes: 250000
 ```
 
 | Property | Type | Default | Env var | Description |
 |----------|------|---------|---------|-------------|
 | `apiProxy.logging.debugTokens` | boolean | `false` | `AWF_DEBUG_TOKENS` | Enable diagnostic token/model-alias logging to file |
 | `apiProxy.logging.tokenLogDir` | string | `/var/log/api-proxy` | `AWF_TOKEN_LOG_DIR` | Directory for `token-usage.jsonl` and `token-diag.jsonl` |
+| `apiProxy.diagnostics.captureBlockedRequests` | string \| boolean | `false` | `AWF_CAPTURE_BLOCKED_LLM_REQUESTS` | Capture body-shape info for guard-blocked requests (`false`/`true`/`summary`/`redacted`/`full`; `true` is an alias for `summary`) |
+| `apiProxy.diagnostics.maxCapturedBytes` | integer | `250000` | `AWF_MAX_BLOCKED_CAPTURE_BYTES` | Max bytes per record in `full` capture mode |
 
 ### 13.4 Log File Inventory
 
@@ -1250,6 +1338,7 @@ Directory: configured by `apiProxy.logging.tokenLogDir` / `AWF_TOKEN_LOG_DIR`
 |------|--------|-------------|----------------|
 | `token-usage.jsonl` | JSONL (`token-usage/v<version>` schema) | Per-API-call token usage and cost records | Yes (when API proxy is active) |
 | `token-diag.jsonl` | JSONL (`token-diag/v<version>` schema) | Diagnostic events: model resolution steps, alias rewrites, token budget decisions | Only when `apiProxy.logging.debugTokens: true` |
+| `blocked-request-diag.jsonl` | JSONL (`blocked-request-diag/v<version>` schema) | Body-shape diagnostics for guard-blocked requests (effective tokens, AI credits, etc.) | Only when `apiProxy.diagnostics.captureBlockedRequests` is set |
 | `otel.jsonl` | JSONL (OpenTelemetry spans) | Distributed tracing spans; written as local fallback when no OTLP collector is configured | Only when OTEL is active and no collector endpoint set |
 
 #### CLI Proxy Logs
@@ -1273,6 +1362,92 @@ Model alias logging was introduced in **v0.25.40** (PR #2329). The diagnostic
 file mechanism (`token-persistence.js`) was refactored into a dedicated module
 in v0.25.50 but the logging events and their format have been stable since
 initial release.
+
+### 13.6 Blocked Request Diagnostics (blocked-request-diag.jsonl)
+
+When a guard hard-rails a request (e.g. `effective_tokens_limit_exceeded`,
+`ai_credits_limit_exceeded`, `max_runs_exceeded`), the api-proxy can write a
+structured diagnostic record to `blocked-request-diag.jsonl`.  This is
+**opt-in and disabled by default**.
+
+#### Enabling
+
+Set the environment variable or config key before starting the container:
+
+```sh
+# Minimal (body-shape only, no content):
+AWF_CAPTURE_BLOCKED_LLM_REQUESTS=summary
+
+# Include first 200 chars of each message (for debugging over-large tool results):
+AWF_CAPTURE_BLOCKED_LLM_REQUESTS=redacted
+
+# Full body up to AWF_MAX_BLOCKED_CAPTURE_BYTES (default 250 000 bytes):
+AWF_CAPTURE_BLOCKED_LLM_REQUESTS=full
+AWF_MAX_BLOCKED_CAPTURE_BYTES=250000
+```
+
+Or via config YAML:
+
+```yaml
+apiProxy:
+  diagnostics:
+    captureBlockedRequests: summary   # false | summary | redacted | full
+    maxCapturedBytes: 250000
+```
+
+#### Capture modes
+
+| Mode | Content | Use case |
+|------|---------|----------|
+| `false` (default) | Nothing written | Production default |
+| `summary` | Counts, sizes, hashes — **no content** | Safe for normal debugging; identify which message/tool-result was large |
+| `redacted` | Summary + first 200 chars per message | Debug prompt growth without full disclosure |
+| `full` | Full body up to `maxCapturedBytes` | Local/private runs only; explicitly document and review |
+
+#### Record format
+
+Each record follows the `blocked-request-diag/v<version>` schema:
+
+```json
+{
+  "_schema": "blocked-request-diag/v0.26.0",
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "event": "blocked_request_diag",
+  "capture_mode": "summary",
+  "request_id": "bc446626-a67b-4a78-a8c3-7293a2bc7306",
+  "provider": "anthropic",
+  "path": "/v1/messages",
+  "guard_type": "effective_tokens_limit_exceeded",
+  "guard_totals": {
+    "total_effective_tokens": 27198679,
+    "max_effective_tokens": 25000000
+  },
+  "body_transformed": true,
+  "inbound_bytes": 184320,
+  "body_bytes": 185040,
+  "body_sha256": "a3f2b1c8d9e0f1a2",
+  "model": "claude-opus-4.7",
+  "streaming": true,
+  "message_count": 52,
+  "tool_result_count": 14,
+  "message_sizes": [
+    { "role": "user",      "content_type": "text",        "chars": 312,   "bytes": 312,   "estimated_tokens": 78 },
+    { "role": "assistant", "content_type": "text",        "chars": 1840,  "bytes": 1840,  "estimated_tokens": 460 },
+    { "role": "user",      "content_type": "tool_result", "chars": 94321, "bytes": 94321, "estimated_tokens": 23580, "tool_blocks": 3 }
+  ]
+}
+```
+
+#### Security considerations
+
+- `summary` mode captures **no message content** and is safe for shared/public
+  workflow runs.
+- `redacted` mode includes short previews; review before attaching to public
+  issues.
+- `full` mode captures potentially sensitive prompt and tool-result content.
+  Use only for private runs and rotate or delete the artifact promptly.
+- The file is written to `AWF_TOKEN_LOG_DIR` alongside `token-usage.jsonl`
+  and is governed by the same artifact-retention policy.
 
 ## Normative References
 

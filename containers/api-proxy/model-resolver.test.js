@@ -13,8 +13,8 @@ const {
   selectMiddlePowerFallback,
   filterResolvableAliases,
   resolveModel,
-  rewriteModelInBody,
 } = require('./model-resolver');
+const { rewriteModelInBody } = require('./model-body-rewriter');
 
 // ── parseModelAliases ──────────────────────────────────────────────────────
 

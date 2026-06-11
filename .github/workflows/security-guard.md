@@ -9,17 +9,20 @@ permissions:
   contents: read
   pull-requests: read
   issues: read
+max-turns: 6
 engine:
   id: claude
   model: claude-sonnet-4-5
-  max-turns: 4
 tools:
   github:
     mode: gh-proxy
     toolsets: [pull_requests, repos]
 sandbox:
+  mcp:
+    version: "latest"
   agent:
     id: awf
+strict: false
 network:
   allowed:
     - github

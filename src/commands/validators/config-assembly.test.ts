@@ -253,6 +253,83 @@ describe('config-assembly', () => {
       expect(result).toBeDefined();
       expect(mockExit).not.toHaveBeenCalled();
     });
+
+    it('should reject relative chroot binaries source path', () => {
+      mockBuildConfigOnce({
+        awfDockerHost: undefined,
+        dockerHostPathPrefix: undefined,
+        chrootBinariesSourcePath: 'relative/path',
+      });
+
+      expect(() => {
+        callAssembleWith();
+      }).toThrow('process.exit(1)');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('chroot.binariesSourcePath must be an absolute path'),
+      );
+    });
+
+    it('should accept absolute chroot binaries source path', () => {
+      mockBuildConfigOnce({
+        awfDockerHost: undefined,
+        dockerHostPathPrefix: undefined,
+        chrootBinariesSourcePath: '/tmp/gh-aw/runner-bin',
+      });
+
+      const result = callAssembleWith();
+
+      expect(result).toBeDefined();
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it('should reject chroot binaries source path set to root', () => {
+      mockBuildConfigOnce({
+        awfDockerHost: undefined,
+        dockerHostPathPrefix: undefined,
+        chrootBinariesSourcePath: '/',
+      });
+
+      expect(() => {
+        callAssembleWith();
+      }).toThrow('process.exit(1)');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('chroot.binariesSourcePath cannot be "/"'),
+      );
+    });
+
+    it('should reject chroot binaries source path containing a colon', () => {
+      mockBuildConfigOnce({
+        awfDockerHost: undefined,
+        dockerHostPathPrefix: undefined,
+        chrootBinariesSourcePath: '/tmp/bin:/extra',
+      });
+
+      expect(() => {
+        callAssembleWith();
+      }).toThrow('process.exit(1)');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('chroot.binariesSourcePath must not contain ":" or newline characters'),
+      );
+    });
+
+    it('should reject chroot binaries source path containing a newline', () => {
+      mockBuildConfigOnce({
+        awfDockerHost: undefined,
+        dockerHostPathPrefix: undefined,
+        chrootBinariesSourcePath: '/tmp/bin\n/extra',
+      });
+
+      expect(() => {
+        callAssembleWith();
+      }).toThrow('process.exit(1)');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('chroot.binariesSourcePath must not contain ":" or newline characters'),
+      );
+    });
   });
 
   describe('rate limit validation', () => {
@@ -720,6 +797,79 @@ describe('config-assembly', () => {
       expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining("Did you mean 'gpt-5.3-codex'?"),
       );
+    });
+
+    it('should reject retired COPILOT_MODEL aliases in BYOK mode (copilotProviderApiKey)', () => {
+      mockBuildConfigOnce({
+        copilotProviderApiKey: 'byok-api-key-for-azure-foundry',
+      });
+
+      const agentOptions = createMinimalAgentOptions();
+      agentOptions.additionalEnv = { COPILOT_MODEL: 'gpt-5-codex' };
+
+      expect(() => {
+        assembleAndValidateConfig(
+          {},
+          'echo test',
+          createMinimalLogAndLimits(),
+          createMinimalNetworkOptions(),
+          agentOptions,
+        );
+      }).toThrow('process.exit(1)');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("model 'gpt-5-codex' is retired or unsupported"),
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Did you mean 'gpt-5.3-codex'?"),
+      );
+    });
+
+    it('should allow custom COPILOT_MODEL values in BYOK mode with a provider base URL', () => {
+      mockBuildConfigOnce({
+        copilotProviderApiKey: 'byok-api-key-for-azure-foundry',
+        copilotProviderBaseUrl: 'https://example-resource.openai.azure.com/openai/deployments/o4-mini-aw',
+        additionalEnv: { COPILOT_MODEL: 'o4-mini-aw' },
+      });
+
+      const agentOptions = createMinimalAgentOptions();
+      agentOptions.additionalEnv = { COPILOT_MODEL: 'o4-mini-aw' };
+
+      const result = assembleAndValidateConfig(
+        {},
+        'echo test',
+        createMinimalLogAndLimits(),
+        createMinimalNetworkOptions(),
+        agentOptions,
+      );
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(result.additionalEnv?.COPILOT_MODEL).toBe('o4-mini-aw');
+    });
+
+    it('should allow custom COPILOT_MODEL values when provider base URL is set via env file', () => {
+      const envFilePath = path.join(testDir, 'byok.env');
+      fs.writeFileSync(envFilePath, 'COPILOT_PROVIDER_BASE_URL=https://example-resource.openai.azure.com/openai/deployments/o4-mini-aw\n');
+
+      mockBuildConfigOnce({
+        copilotProviderApiKey: 'byok-api-key-for-azure-foundry',
+        envFile: envFilePath,
+        additionalEnv: { COPILOT_MODEL: 'o4-mini-aw' },
+      });
+
+      const agentOptions = createMinimalAgentOptions();
+      agentOptions.additionalEnv = { COPILOT_MODEL: 'o4-mini-aw' };
+
+      const result = assembleAndValidateConfig(
+        {},
+        'echo test',
+        createMinimalLogAndLimits(),
+        createMinimalNetworkOptions(),
+        agentOptions,
+      );
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(result.additionalEnv?.COPILOT_MODEL).toBe('o4-mini-aw');
     });
 
     it('should log normalization when COPILOT_MODEL casing is adjusted', () => {

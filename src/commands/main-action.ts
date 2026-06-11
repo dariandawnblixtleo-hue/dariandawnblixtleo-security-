@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { logger } from '../logger';
 import {
   writeConfigs,
@@ -22,6 +24,7 @@ import { applyConfigFilePrecedence } from './preflight';
 import { registerSignalHandlers } from './signal-handler';
 import { validateOptions } from './validate-options';
 import { probeSplitFilesystem } from '../dind-probe';
+import { runDindBootstrap } from '../dind-bootstrap';
 
 /**
  * Resolves the Commander option-value source for a given option name.
@@ -96,6 +99,8 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
         'Set --docker-host-path-prefix manually if bind mounts fail.',
       );
     }
+
+    await runDindBootstrap(config);
   }
 
   // Log config with redacted secrets - remove API keys entirely
@@ -112,6 +117,22 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
     redactedConfig[key] = key === 'agentCommand' ? redactSecrets(value as string) : value;
   }
   logger.debug('Configuration:', JSON.stringify(redactedConfig, null, 2));
+
+  // Persist redacted config to audit artifact for post-run diagnostics
+  try {
+    const configArtifactDir = config.auditDir || path.join(config.workDir, 'audit');
+    fs.mkdirSync(configArtifactDir, { recursive: true, mode: 0o755 });
+    const configArtifactPath = path.join(configArtifactDir, 'awf-resolved-config.json');
+    fs.writeFileSync(
+      configArtifactPath,
+      JSON.stringify(redactedConfig, null, 2) + '\n',
+      { mode: 0o644 },
+    );
+    fs.chmodSync(configArtifactPath, 0o644);
+  } catch (err) {
+    logger.debug(`Failed to write resolved config artifact: ${err}`);
+  }
+
   logger.info(`Allowed domains: ${config.allowedDomains.join(', ')}`);
   if (config.blockedDomains && config.blockedDomains.length > 0) {
     logger.info(`Blocked domains: ${config.blockedDomains.join(', ')}`);

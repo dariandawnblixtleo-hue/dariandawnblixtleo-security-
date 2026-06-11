@@ -3,6 +3,7 @@
 const http = require('http');
 const tls = require('tls');
 const { URL } = require('url');
+const { computeTokenBudgetUsage } = require('./token-budget-log');
 
 function createProxyWebSocket({
   limiter,
@@ -23,8 +24,6 @@ function createProxyWebSocket({
   getAiCreditsBlockState,
   buildAiCreditsLimitError,
   trackWebSocketTokenUsage,
-  applyEffectiveTokenUsage,
-  applyAiCreditsUsage,
 }) {
   /**
    * Handle a WebSocket upgrade request by tunnelling through the Squid proxy.
@@ -115,6 +114,7 @@ function createProxyWebSocket({
         provider,
         total_ai_credits: aiCreditsBlock.totalAiCredits,
         max_ai_credits: aiCreditsBlock.maxAiCredits,
+        hard_cap: aiCreditsBlock.hardCap === true,
       });
       socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n');
       socket.write(JSON.stringify(buildAiCreditsLimitError(aiCreditsBlock)));
@@ -232,18 +232,7 @@ function createProxyWebSocket({
           startTime,
           metrics,
           onUsage: (normalizedUsage, model) => {
-            const effectiveTokenUsage = applyEffectiveTokenUsage(normalizedUsage, model);
-            const aiCreditsUsage = applyAiCreditsUsage(normalizedUsage, model);
-            if (effectiveTokenUsage || aiCreditsUsage) {
-              logRequest('info', 'token_budget_usage', {
-                request_id: requestId,
-                provider,
-                model: model || 'unknown',
-                effective_tokens_this_response: effectiveTokenUsage?.effectiveTokensThisResponse ?? null,
-                ai_credits_this_response: aiCreditsUsage?.aiCreditsThisResponse ?? null,
-                ai_credits_total: aiCreditsUsage?.totalAiCredits ?? null,
-              });
-            }
+            return computeTokenBudgetUsage({ logRequest, requestId, provider }, normalizedUsage, model);
           },
         });
 

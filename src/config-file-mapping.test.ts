@@ -161,8 +161,8 @@ describe('mapAwfFileConfigToCliOptions', () => {
     expect(result.enableTokenSteering).toBe(true);
   });
 
-  it('maps maxRuns field', () => {
-    const result = mapAwfFileConfigToCliOptions({ apiProxy: { maxRuns: 42 } });
+  it('maps maxTurns field', () => {
+    const result = mapAwfFileConfigToCliOptions({ apiProxy: { maxTurns: 42 } });
     expect(result.maxRuns).toBe(42);
   });
 
@@ -209,7 +209,7 @@ describe('mapAwfFileConfigToCliOptions', () => {
     expect(result.copilotProviderBaseUrl).toBe('https://example-resource.openai.azure.com/openai/deployments/test');
   });
 
-  it('leaves maxRuns undefined when not set', () => {
+  it('leaves maxRuns undefined when maxTurns is not set', () => {
     const result = mapAwfFileConfigToCliOptions({});
     expect(result.maxRuns).toBeUndefined();
   });
@@ -308,6 +308,40 @@ describe('mapAwfFileConfigToCliOptions', () => {
     expect(result.auditDir).toBe('/tmp/audit');
     expect(result.proxyLogsDir).toBe('/tmp/proxy');
     expect(result.sessionStateDir).toBe('/tmp/state');
+  });
+
+  it('maps chroot and dind config-only fields', () => {
+    const result = mapAwfFileConfigToCliOptions({
+      chroot: {
+        binariesSourcePath: '/tmp/gh-aw/runner-bin',
+        identity: {
+          home: '/tmp/gh-aw/home',
+          user: 'runner',
+          uid: 1001,
+          gid: 1001,
+        },
+      },
+      dind: {
+        preStageDirs: true,
+        workDir: '/tmp/gh-aw',
+        stagingImage: 'ghcr.io/github/gh-aw-firewall/agent:latest',
+        stageEngineBinary: {
+          path: '/usr/local/bin/copilot',
+          targetPath: '/usr/local/bin/copilot',
+        },
+      },
+    });
+
+    expect(result.chrootIdentityHome).toBe('/tmp/gh-aw/home');
+    expect(result.chrootIdentityUser).toBe('runner');
+    expect(result.chrootIdentityUid).toBe('1001');
+    expect(result.chrootIdentityGid).toBe('1001');
+    expect(result.chrootBinariesSourcePath).toBe('/tmp/gh-aw/runner-bin');
+    expect(result.dindPreStageDirs).toBe(true);
+    expect(result.dindWorkDir).toBe('/tmp/gh-aw');
+    expect(result.dindStagingImage).toBe('ghcr.io/github/gh-aw-firewall/agent:latest');
+    expect(result.dindStageEngineBinaryPath).toBe('/usr/local/bin/copilot');
+    expect(result.dindStageEngineBinaryTargetPath).toBe('/usr/local/bin/copilot');
   });
 
   it('maps apiProxy.auth.anthropicTokenUrl', () => {

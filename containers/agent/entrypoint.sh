@@ -151,6 +151,25 @@ echo "[entrypoint] iptables initialization complete"
 # If health check fails, the script exits with non-zero code and prevents agent from running
 /usr/local/bin/api-proxy-health-check.sh || exit 1
 
+# Run CLI proxy liveness check (fail-fast when DIFC proxy / Docker is unavailable)
+# This prevents unbounded in-agent retries on connection-refused errors (e.g. when
+# awmg-cli-proxy is not running).  Must run BEFORE the user command so the agent
+# never starts into a broken proxy environment.
+if [ -n "$AWF_CLI_PROXY_URL" ]; then
+  echo "[entrypoint] Checking CLI proxy liveness at $AWF_CLI_PROXY_URL..."
+  # Extract host and port from the URL (format: http://IP:PORT)
+  CLI_PROXY_HOST=$(echo "$AWF_CLI_PROXY_URL" | sed -E 's|^https?://([^:/]+).*|\1|')
+  CLI_PROXY_PORT=$(echo "$AWF_CLI_PROXY_URL" | sed -E 's|^https?://[^:]+:([0-9]+).*|\1|')
+  if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${CLI_PROXY_HOST}/${CLI_PROXY_PORT}" 2>/dev/null; then
+    echo "[entrypoint] ✓ CLI proxy is reachable at $AWF_CLI_PROXY_URL"
+  else
+    echo "[entrypoint][ERROR] CLI proxy at $AWF_CLI_PROXY_URL is not reachable"
+    echo "[entrypoint][ERROR] The DIFC proxy (awmg-cli-proxy) may be unavailable or Docker may be down"
+    echo "[entrypoint][ERROR] Failing fast to prevent unbounded in-agent retries on connection-refused errors"
+    exit 1
+  fi
+fi
+
 # Configure Claude Code API key helper
 # This ensures the apiKeyHelper is properly configured in the config files
 # The config files must exist before Claude Code starts for authentication to work
@@ -708,11 +727,12 @@ if [ "${AWF_CHROOT_ENABLED}" = "true" ]; then
 
   # Find the user name on the host system by UID
   # This allows us to run as the same user inside the chroot
-  HOST_USER_UID="${AWF_USER_UID:-1000}"
-  HOST_USER_GID="${AWF_USER_GID:-${HOST_USER_UID}}"
+  HOST_USER_UID="${AWF_CHROOT_IDENTITY_UID:-${AWF_USER_UID:-1000}}"
+  HOST_USER_GID="${AWF_CHROOT_IDENTITY_GID:-${AWF_USER_GID:-${HOST_USER_UID}}}"
   HOST_USER=$(chroot /host getent passwd "${HOST_USER_UID}" 2>/dev/null | cut -d: -f1 || echo "")
   CAPSH_IDENTITY_ARGS=""
-  CHROOT_HOME_OVERRIDE=""
+  CHROOT_HOME_OVERRIDE="${AWF_CHROOT_IDENTITY_HOME:-}"
+  CHROOT_USER_OVERRIDE="${AWF_CHROOT_IDENTITY_USER:-}"
   if [ -z "${HOST_USER}" ]; then
     # User not found in chroot's /etc/passwd (common on ARC-DinD Alpine daemons).
     # Synthesize minimal identity files so the agent can resolve its own UID/GID.
@@ -793,12 +813,18 @@ if [ "${AWF_CHROOT_ENABLED}" = "true" ]; then
       echo "[entrypoint] Running as synthesized host user: ${HOST_USER} (UID: ${HOST_USER_UID})"
     else
       CAPSH_IDENTITY_ARGS="--gid=${HOST_USER_GID} --uid=${HOST_USER_UID} --groups=${HOST_USER_GID}"
-      CHROOT_HOME_OVERRIDE="${SYNTH_HOME}"
+      if [ -z "${CHROOT_HOME_OVERRIDE}" ]; then
+        CHROOT_HOME_OVERRIDE="${SYNTH_HOME}"
+      fi
       echo "[entrypoint][WARN] Proceeding with numeric UID/GID fallback (${HOST_USER_UID}:${HOST_USER_GID})"
     fi
   else
     CAPSH_IDENTITY_ARGS="--user=${HOST_USER}"
     echo "[entrypoint] Running as host user: ${HOST_USER} (UID: ${HOST_USER_UID})"
+  fi
+
+  if [ -z "${CHROOT_USER_OVERRIDE}" ] && [ -n "${HOST_USER}" ]; then
+    CHROOT_USER_OVERRIDE="${HOST_USER}"
   fi
 
   # Write the command to a temporary script file in the chroot
@@ -954,6 +980,15 @@ AWFEOF
       echo "[entrypoint][WARN] AWF_PREFLIGHT_BINARY='${AWF_PREFLIGHT_BINARY}' contains unsafe characters; skipping preflight check." >&2
     fi
   fi
+  # Apply explicit chroot identity overrides inside the script runtime (after
+  # capsh user-switch) so capsh does not clobber HOME/USER/LOGNAME.
+  if [ -n "${CHROOT_HOME_OVERRIDE}" ]; then
+    printf 'export HOME=%q\n' "${CHROOT_HOME_OVERRIDE}" >> "/host${SCRIPT_FILE}"
+  fi
+  if [ -n "${CHROOT_USER_OVERRIDE}" ]; then
+    printf 'export USER=%q\n' "${CHROOT_USER_OVERRIDE}" >> "/host${SCRIPT_FILE}"
+    printf 'export LOGNAME=%q\n' "${CHROOT_USER_OVERRIDE}" >> "/host${SCRIPT_FILE}"
+  fi
   # Append the actual command arguments
   # Docker CMD passes commands as ['/bin/bash', '-c', 'command_string'].
   # Instead of writing the full [bash, -c, cmd] via printf '%q' (which creates
@@ -1059,7 +1094,6 @@ AWFEOF
     cd '${CHROOT_WORKDIR}' 2>/dev/null || cd /
     trap '${CLEANUP_CMD}' EXIT
     ${LD_PRELOAD_CMD}
-    if [ -n '${CHROOT_HOME_OVERRIDE}' ]; then export HOME='${CHROOT_HOME_OVERRIDE}'; fi
     exec capsh --drop=${CAPS_TO_DROP} ${CAPSH_IDENTITY_ARGS} -- -c 'exec ${SCRIPT_FILE}'
   "
 else

@@ -183,6 +183,12 @@ In chroot mode, selective paths are mounted for security instead of the entire f
 | `/etc/passwd` | `/host/etc/passwd:ro` | User lookup |
 | `/etc/group` | `/host/etc/group:ro` | Group lookup |
 
+When `chroot.binariesSourcePath` is set in stdin config, AWF also mounts:
+
+| Host Path | Container Path | Purpose |
+|-----------|----------------|---------|
+| `chroot.binariesSourcePath` | `/host/usr/local/bin:ro` | Overlay runner-installed binaries in chroot PATH |
+
 **Note:** As of v0.13.13, `/proc` is no longer bind-mounted. Instead, a fresh container-scoped procfs is mounted at `/host/proc` during entrypoint initialization. This provides dynamic `/proc/self/exe` resolution required by Java and .NET runtimes.
 
 ### Read-Write Mounts
@@ -350,6 +356,25 @@ AWF handles this automatically at two layers:
 2. **Runtime fallback** (`entrypoint.sh`): If `getent passwd $UID` fails inside the chroot (user not found), the entrypoint attempts to synthesize `/etc/passwd` and `/etc/group` entries. If those mounts are read-only, it falls back to running with numeric `UID:GID` directly.
 
 No configuration is required — synthesis is triggered automatically when user lookup fails.
+
+### Chroot Identity Override (ARC/DinD)
+
+On split-filesystem ARC/DinD runners, you can explicitly override chroot identity values via stdin config:
+
+```json
+{
+  "chroot": {
+    "identity": {
+      "home": "/tmp/gh-aw/home",
+      "user": "runner",
+      "uid": 1001,
+      "gid": 1001
+    }
+  }
+}
+```
+
+AWF forwards these values to the agent entrypoint and applies them **after** `chroot /host`, overriding default `HOME`, `USER`, and `LOGNAME` values for the chrooted command runtime.
 
 ### Error: Working directory does not exist
 

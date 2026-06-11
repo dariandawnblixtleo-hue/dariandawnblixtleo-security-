@@ -55,6 +55,7 @@ export function useCleanupTestDir(
   });
 
   afterEach(() => {
+    /* istanbul ignore else */
     if (testDir) {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
@@ -62,8 +63,44 @@ export function useCleanupTestDir(
 
   return {
     getDir: () => {
+      /* istanbul ignore next */
       if (!testDir) {
         throw new Error('Cleanup test directory is not initialized');
+      }
+      return testDir;
+    },
+  };
+}
+
+/**
+ * General-purpose temporary directory lifecycle for unit tests.
+ *
+ * Creates a fresh temp dir (with the given prefix) before each test, calls
+ * `jest.clearAllMocks()`, and removes the directory after each test.
+ *
+ * @param prefix - Directory name prefix passed to `fs.mkdtempSync`. Defaults to `'awf-test-'`.
+ * @returns An object with a `getDir()` accessor for the current temp dir path.
+ */
+export function useTempDir(prefix = 'awf-test-'): { getDir: () => string } {
+  let testDir: string | undefined;
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    /* istanbul ignore else */
+    if (testDir) {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  return {
+    getDir: () => {
+      /* istanbul ignore next */
+      if (!testDir) {
+        throw new Error('Temp test directory is not initialized');
       }
       return testDir;
     },

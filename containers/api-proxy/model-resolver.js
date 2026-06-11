@@ -20,7 +20,7 @@
  */
 
 const { getTierSortedModels } = require('./model-discovery');
-const { parseBodyAsObject } = require('./body-utils');
+const { globMatch, extractVersionNumbers, compareByVersion } = require('./model-utils');
 
 const DEFAULT_MODEL_FALLBACK = Object.freeze({
   enabled: true,
@@ -164,61 +164,6 @@ function matchProviderModelPattern(pattern, provider, model) {
   const modelPattern = pattern.slice(slashIdx + 1);
   if (patternProvider !== '*' && patternProvider !== provider.toLowerCase()) return false;
   return globMatch(modelPattern, model);
-}
-
-/**
- * Case-insensitive glob pattern matching supporting * wildcards.
- *
- * @param {string} pattern - Glob pattern (supports * as wildcard)
- * @param {string} str - String to match against
- * @returns {boolean}
- */
-function globMatch(pattern, str) {
-  const p = pattern.toLowerCase();
-  const s = str.toLowerCase();
-  // Build a regex from the glob pattern.
-  // Escape ALL regex metacharacters so they match literally, then restore *→.*.
-  // The documented syntax supports only * as a wildcard; characters like ? that
-  // are regex quantifiers must match literally.
-  const regexStr = '^' + p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
-  return new RegExp(regexStr).test(s);
-}
-
-/**
- * Extract all decimal-separated numeric segments from a model name.
- * Used for semver-style version comparison.
- *
- * Examples:
- *   "claude-sonnet-4.6"  → [4, 6]
- *   "gpt-4o"             → [4]
- *   "gemini-1.5-pro"     → [1, 5]
- *   "my-model"           → []
- *
- * @param {string} modelName
- * @returns {number[]}
- */
-function extractVersionNumbers(modelName) {
-  const matches = modelName.match(/\d+/g);
-  return matches ? matches.map(Number) : [];
-}
-
-/**
- * Compare two model names by version numbers (highest version first).
- * Falls back to lexicographic comparison when no version numbers are present.
- *
- * @param {string} a
- * @param {string} b
- * @returns {number} Negative if a should sort before b (i.e. a is higher version)
- */
-function compareByVersion(a, b) {
-  const av = extractVersionNumbers(a);
-  const bv = extractVersionNumbers(b);
-  for (let i = 0; i < Math.max(av.length, bv.length); i++) {
-    const ai = i < av.length ? av[i] : 0;
-    const bi = i < bv.length ? bv[i] : 0;
-    if (ai !== bi) return bi - ai; // Highest version first
-  }
-  return a.localeCompare(b); // Lexicographic fallback
 }
 
 function normalizeFallbackConfig(modelFallbackConfig) {
@@ -530,83 +475,6 @@ function filterResolvableAliases(aliases, availableModels, modelPolicy = null) {
   return result;
 }
 
-/**
- * Attempt to rewrite the "model" field in a JSON request body using the alias map.
- *
- * Returns the rewritten body buffer and the resolution log when a rewrite occurs.
- * Returns null when no rewrite is needed or possible.
- * Returns a `{ blocked: true, ... }` object when the requested model is rejected
- * by the configured allow/deny model policy.
- *
- * @param {Buffer} body - Raw request body bytes
- * @param {string} provider - Current provider (e.g. "copilot")
- * @param {Record<string, string[]|{patterns: string[], fallback?: boolean}>|null} aliases - Parsed alias map
- * @param {Record<string, string[]|null>} availableModels - Cached models per provider
- * @param {{ enabled?: boolean, strategy?: string }} [modelFallbackConfig]
- * @param {{ allowed?: string[], disallowed?: string[] } | null} [modelPolicy]
- * @returns {{ body: Buffer, originalModel: string, resolvedModel: string, log: string[], fallback?: object } | { blocked: true, originalModel: string, reason: string, pattern?: string, log: string[] } | null}
- */
-function rewriteModelInBody(body, provider, aliases, availableModels, modelFallbackConfig = DEFAULT_MODEL_FALLBACK, modelPolicy = null) {
-  // Only attempt rewrite for non-empty bodies
-  if (!body || body.length === 0) return null;
-
-  const parsed = parseBodyAsObject(body);
-  if (!parsed) return null; // Non-JSON body — skip
-
-  // Determine the requested model. If absent, try the default alias ("").
-  const originalModel = typeof parsed.model === 'string' ? parsed.model : '';
-  const policy = normalizeModelPolicy(modelPolicy);
-  const policyEnabled = policy.hasAllowList || policy.hasDenyList;
-
-  const aliasMap = aliases && typeof aliases === 'object' ? aliases : {};
-  const resolution = resolveModel(originalModel, aliasMap, availableModels, provider, [], modelFallbackConfig, policy);
-
-  // If alias resolution failed but policy is enabled and a concrete model was
-  // requested, surface a "blocked" result so the proxy can reject the request
-  // with a clear diagnostic rather than passing it upstream.
-  if (!resolution) {
-    if (policyEnabled && originalModel) {
-      const check = checkModelPolicy(provider, originalModel, policy);
-      if (!check.allowed) {
-        return {
-          blocked: true,
-          originalModel,
-          reason: check.reason,
-          pattern: check.pattern,
-          log: [`[model-resolver] request blocked by model policy: "${originalModel}" (${check.reason})`],
-        };
-      }
-    }
-    return null;
-  }
-
-  const { resolvedModel, log } = resolution;
-
-  // Defence-in-depth: even if `resolveModel` returned a candidate, double-check
-  // it against the policy before rewriting the request body.
-  if (policyEnabled) {
-    const check = checkModelPolicy(provider, resolvedModel, policy);
-    if (!check.allowed) {
-      return {
-        blocked: true,
-        originalModel: originalModel || resolvedModel,
-        reason: check.reason,
-        pattern: check.pattern,
-        log: [...log, `[model-resolver] resolved model blocked by policy: "${resolvedModel}" (${check.reason})`],
-      };
-    }
-  }
-
-  // No rewrite needed if the model is already the resolved value
-  if (resolvedModel === parsed.model) return null;
-
-  // Patch the body
-  parsed.model = resolvedModel;
-  const newBody = Buffer.from(JSON.stringify(parsed), 'utf8');
-
-  return { body: newBody, originalModel, resolvedModel, log, fallback: resolution.fallback };
-}
-
 module.exports = {
   parseModelAliases,
   parseModelGlobList,
@@ -619,5 +487,4 @@ module.exports = {
   selectMiddlePowerFallback,
   filterResolvableAliases,
   resolveModel,
-  rewriteModelInBody,
 };

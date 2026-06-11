@@ -136,13 +136,13 @@ describe('validateAwfFileConfig', () => {
       .toContain('config.apiProxy.maxModelMultiplierCap must be > 0');
   });
 
-  it('validates maxRuns in apiProxy', () => {
-    expect(validateAwfFileConfig({ apiProxy: { maxRuns: 10 } })).toEqual([]);
-    expect(validateAwfFileConfig({ apiProxy: { maxRuns: 1 } })).toEqual([]);
-    expect(validateAwfFileConfig({ apiProxy: { maxRuns: 0 } }))
-      .toContain('config.apiProxy.maxRuns must be a positive integer');
-    expect(validateAwfFileConfig({ apiProxy: { maxRuns: -1 } }))
-      .toContain('config.apiProxy.maxRuns must be a positive integer');
+  it('validates maxTurns in apiProxy', () => {
+    expect(validateAwfFileConfig({ apiProxy: { maxTurns: 10 } })).toEqual([]);
+    expect(validateAwfFileConfig({ apiProxy: { maxTurns: 1 } })).toEqual([]);
+    expect(validateAwfFileConfig({ apiProxy: { maxTurns: 0 } }))
+      .toContain('config.apiProxy.maxTurns must be a positive integer');
+    expect(validateAwfFileConfig({ apiProxy: { maxTurns: -1 } }))
+      .toContain('config.apiProxy.maxTurns must be a positive integer');
   });
 
   it('validates apiProxy.modelFallback fields', () => {
@@ -397,6 +397,63 @@ describe('validateAwfFileConfig', () => {
   it('rejects unknown container keys', () => {
     const errors = validateAwfFileConfig({ container: { unknown: true } });
     expect(errors).toContain('config.container.unknown is not supported');
+  });
+
+  it('rejects non-object chroot', () => {
+    const errors = validateAwfFileConfig({ chroot: 'invalid' });
+    expect(errors).toContain('config.chroot must be an object');
+  });
+
+  it('rejects non-object chroot.identity', () => {
+    const errors = validateAwfFileConfig({ chroot: { identity: 'invalid' } });
+    expect(errors).toContain('config.chroot.identity must be an object');
+  });
+
+  it('rejects non-string chroot.binariesSourcePath', () => {
+    const errors = validateAwfFileConfig({ chroot: { binariesSourcePath: 1 } });
+    expect(errors).toContain('config.chroot.binariesSourcePath must be a string');
+  });
+
+  it('rejects invalid chroot.identity field types', () => {
+    expect(validateAwfFileConfig({ chroot: { identity: { home: 1 } } })).toContain('config.chroot.identity.home must be a string');
+    expect(validateAwfFileConfig({ chroot: { identity: { user: 1 } } })).toContain('config.chroot.identity.user must be a string');
+    expect(validateAwfFileConfig({ chroot: { identity: { uid: 0 } } })).toContain('config.chroot.identity.uid must be a positive integer');
+    expect(validateAwfFileConfig({ chroot: { identity: { uid: -1 } } })).toContain('config.chroot.identity.uid must be a positive integer');
+    expect(validateAwfFileConfig({ chroot: { identity: { uid: 1.5 } } })).toContain('config.chroot.identity.uid must be a positive integer');
+    expect(validateAwfFileConfig({ chroot: { identity: { gid: 0 } } })).toContain('config.chroot.identity.gid must be a positive integer');
+    expect(validateAwfFileConfig({ chroot: { identity: { gid: -1 } } })).toContain('config.chroot.identity.gid must be a positive integer');
+    expect(validateAwfFileConfig({ chroot: { identity: { gid: 1.5 } } })).toContain('config.chroot.identity.gid must be a positive integer');
+  });
+
+  it('rejects unknown chroot.identity keys', () => {
+    const errors = validateAwfFileConfig({ chroot: { identity: { home: '/tmp', extra: true } } });
+    expect(errors).toContain('config.chroot.identity.extra is not supported');
+  });
+
+  it('rejects unknown chroot keys', () => {
+    const errors = validateAwfFileConfig({ chroot: { unknown: true } });
+    expect(errors).toContain('config.chroot.unknown is not supported');
+  });
+
+  it('rejects non-object dind', () => {
+    const errors = validateAwfFileConfig({ dind: 'invalid' });
+    expect(errors).toContain('config.dind must be an object');
+  });
+
+  it('rejects invalid dind field types', () => {
+    expect(validateAwfFileConfig({ dind: { preStageDirs: 'true' } })).toContain('config.dind.preStageDirs must be a boolean');
+    expect(validateAwfFileConfig({ dind: { workDir: 1 } })).toContain('config.dind.workDir must be a string');
+    expect(validateAwfFileConfig({ dind: { stagingImage: 1 } })).toContain('config.dind.stagingImage must be a string');
+  });
+
+  it('rejects non-object dind.stageEngineBinary', () => {
+    const errors = validateAwfFileConfig({ dind: { stageEngineBinary: 'invalid' } });
+    expect(errors).toContain('config.dind.stageEngineBinary must be an object');
+  });
+
+  it('rejects invalid dind.stageEngineBinary field types', () => {
+    expect(validateAwfFileConfig({ dind: { stageEngineBinary: { path: 1 } } })).toContain('config.dind.stageEngineBinary.path must be a string');
+    expect(validateAwfFileConfig({ dind: { stageEngineBinary: { targetPath: 1 } } })).toContain('config.dind.stageEngineBinary.targetPath must be a string');
   });
 
   it('rejects non-object environment', () => {

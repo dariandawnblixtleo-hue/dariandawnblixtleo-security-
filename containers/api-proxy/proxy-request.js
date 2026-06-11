@@ -25,7 +25,6 @@ const { createUpstreamResponseHandlers } = require('./upstream-response');
 const { createRateLimitChecker } = require('./rate-limit');
 const { createProxyWebSocket } = require('./websocket-proxy');
 const {
-  applyEffectiveTokenUsage,
   getEffectiveTokenBlockState,
   getEffectiveTokenReflectState,
   resetEffectiveTokenGuardForTests,
@@ -56,12 +55,17 @@ const {
   resetMaxModelMultiplierGuardForTests,
 } = require('./guards/max-model-multiplier-guard');
 const {
-  applyAiCreditsUsage,
   getAiCreditsReflectState,
   getAiCreditsBlockState,
   buildAiCreditsLimitError,
+  checkUnknownModelRejection,
   resetAiCreditsGuardForTests,
 } = require('./guards/ai-credits-guard');
+const {
+  getRetiredModelBlockState,
+  buildRetiredModelError,
+} = require('./guards/retired-model-guard');
+const { writeBlockedRequestDiag } = require('./blocked-request-diagnostics');
 
 // ── Optional token tracker (graceful degradation when not bundled) ────────────
 let trackTokenUsage;
@@ -89,6 +93,7 @@ try {
     otel = {
       startRequestSpan:  () => noopSpan,
       setTokenAttributes: noop,
+      setBudgetAttributes: noop,
       endSpan:           noop,
       endSpanError:      noop,
       shutdown:          () => Promise.resolve(),
@@ -224,8 +229,6 @@ const proxyWebSocket = createProxyWebSocket({
   getAiCreditsBlockState,
   buildAiCreditsLimitError,
   trackWebSocketTokenUsage,
-  applyEffectiveTokenUsage,
-  applyAiCreditsUsage,
 });
 
 // ── Proxy helpers ─────────────────────────────────────────────────────────────
@@ -290,8 +293,6 @@ const { handleUpstreamResponse } = createUpstreamResponseHandlers({
   otel,
   handleRequestError,
   trackTokenUsage,
-  applyEffectiveTokenUsage,
-  applyAiCreditsUsage,
   applyMaxRunsInvocation,
   applyPermissionDenied,
   extractBillingHeaders,
@@ -360,7 +361,304 @@ function sendUpstreamRequest(requestHeaders, {
   proxyReq.end();
 }
 
+function sendGuardBlockedResponse(block, {
+  req,
+  res,
+  provider,
+  requestId,
+  startTime,
+  span,
+  statusCode,
+  eventName,
+  buildError,
+  buildLogFields,
+  body,
+  inboundBytes,
+}) {
+  const duration = Date.now() - startTime;
+  const guardLogFields = buildLogFields(block);
+  metrics.gaugeDec('active_requests', { provider });
+  metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
+  metrics.observe('request_duration_ms', duration, { provider });
+  logRequest('warn', eventName, {
+    request_id: requestId,
+    provider,
+    ...guardLogFields,
+  });
+  otel.endSpan(span, statusCode);
+  res.writeHead(statusCode, { 'Content-Type': 'application/json', 'X-Request-ID': requestId });
+  res.end(JSON.stringify(buildError(block)));
+
+  writeBlockedRequestDiag({
+    requestId,
+    provider,
+    path: sanitizeForLog(req.url),
+    guardType: eventName,
+    guardLogFields,
+    body: body || Buffer.alloc(0),
+    inboundBytes: inboundBytes || 0,
+  });
+}
+
+function enforceGuards({ body, provider, req, res, requestId, startTime, span, inboundBytes }) {
+  const checkModelMultiplier = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH';
+  const guardChecks = [
+    {
+      block: getEffectiveTokenBlockState(),
+      isBlocked: block => block && block.maxExceeded,
+      statusCode: 429,
+      eventName: 'effective_tokens_limit_exceeded',
+      buildError: buildEffectiveTokenLimitError,
+      buildLogFields: block => ({
+        total_effective_tokens: block.totalEffectiveTokens,
+        max_effective_tokens: block.maxEffectiveTokens,
+      }),
+    },
+    {
+      block: getMaxRunsBlockState(),
+      isBlocked: block => block && block.maxExceeded,
+      statusCode: 429,
+      eventName: 'max_runs_exceeded',
+      buildError: buildMaxRunsExceededError,
+      buildLogFields: block => ({
+        invocation_count: block.invocationCount,
+        max_runs: block.maxRuns,
+      }),
+    },
+    {
+      block: getPermissionDeniedBlockState(),
+      isBlocked: block => block && block.maxExceeded,
+      statusCode: 403,
+      eventName: 'permission_denied_limit_exceeded',
+      buildError: buildPermissionDeniedLimitError,
+      buildLogFields: block => ({
+        denied_count: block.deniedCount,
+        max_permission_denied: block.maxPermissionDenied,
+      }),
+    },
+    {
+      block: getAiCreditsBlockState(),
+      isBlocked: block => block && block.maxExceeded,
+      statusCode: 429,
+      eventName: 'ai_credits_limit_exceeded',
+      buildError: buildAiCreditsLimitError,
+      buildLogFields: block => ({
+        total_ai_credits: block.totalAiCredits,
+        max_ai_credits: block.maxAiCredits,
+        hard_cap: block.hardCap === true,
+      }),
+    },
+    ...(checkModelMultiplier
+      ? [{
+        block: getModelMultiplierCapBlockState(extractModelFromBody(body)),
+        isBlocked: block => !!block,
+        statusCode: 400,
+        eventName: 'model_multiplier_cap_exceeded',
+        buildError: buildModelMultiplierCapError,
+        buildLogFields: block => ({
+          model: block.model,
+          model_multiplier: block.multiplier,
+          max_model_multiplier: block.maxModelMultiplier,
+        }),
+      }]
+      : []),
+    ...(checkModelMultiplier
+      ? [{
+        block: getRetiredModelBlockState(extractModelFromBody(body)),
+        isBlocked: block => !!block,
+        statusCode: 400,
+        eventName: 'retired_model',
+        buildError: buildRetiredModelError,
+        buildLogFields: block => ({
+          model: block.model,
+          suggestion: block.suggestion,
+        }),
+      }]
+      : []),
+    ...(checkModelMultiplier
+      ? [{
+        block: checkUnknownModelRejection(extractModelFromBody(body)),
+        isBlocked: block => !!block,
+        statusCode: 400,
+        eventName: 'unknown_model_ai_credits',
+        buildError: block => block.error,
+        buildLogFields: block => ({
+          model: block.model,
+        }),
+      }]
+      : []),
+  ];
+
+  for (const guard of guardChecks) {
+    if (!guard.isBlocked(guard.block)) continue;
+    sendGuardBlockedResponse(guard.block, {
+      req,
+      res,
+      provider,
+      requestId,
+      startTime,
+      span,
+      statusCode: guard.statusCode,
+      eventName: guard.eventName,
+      buildError: guard.buildError,
+      buildLogFields: guard.buildLogFields,
+      body,
+      inboundBytes,
+    });
+    return true;
+  }
+
+  return false;
+}
+
 // ── Core proxy: HTTP ──────────────────────────────────────────────────────────
+
+/**
+ * Collect the full request body from the inbound stream, enforcing the 10 MB
+ * size limit. Sends a 413 response inline when the limit is exceeded, and
+ * handles client stream errors with a 400 response.
+ *
+ * @param {import('http').IncomingMessage} req
+ * @param {string} provider
+ * @param {string} requestId
+ * @param {import('http').ServerResponse} res
+ * @param {object} span - OTEL span (or no-op shim)
+ * @param {number} startTime - Request start timestamp (ms)
+ * @param {string} targetHost - Upstream hostname (used in log fields)
+ * @returns {Promise<Buffer|null>} Collected body, or null if the request was
+ *   already rejected (413) or errored before the body was fully received.
+ */
+function collectRequestBody(req, provider, requestId, res, span, startTime, targetHost) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let totalBytes = 0;
+    let settled = false;
+
+    function settle(value) {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    }
+
+    req.on('close', () => {
+      if (settled || req.complete) return;
+      const duration = Date.now() - startTime;
+      metrics.gaugeDec('active_requests', { provider });
+      logRequest('warn', 'request_aborted', {
+        request_id: requestId, provider, method: req.method,
+        path: sanitizeForLog(req.url), duration_ms: duration,
+        upstream_host: targetHost,
+      });
+      otel.endSpan(span, 0);
+      settle(null);
+    });
+
+    req.on('error', (err) => {
+      if (settled) return;
+      otel.endSpanError(span, err, 400);
+      handleRequestError(err, {
+        res, requestId, provider, req, targetHost,
+        startTime, statusCode: 400, clientMessage: 'Client error',
+      });
+      settle(null);
+    });
+
+    req.on('data', (chunk) => {
+      if (settled) return;
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_SIZE) {
+        const duration = Date.now() - startTime;
+        metrics.gaugeDec('active_requests', { provider });
+        metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
+        logRequest('warn', 'request_complete', {
+          request_id: requestId, provider, method: req.method,
+          path: sanitizeForLog(req.url), status: 413, duration_ms: duration,
+          request_bytes: totalBytes, upstream_host: targetHost,
+        });
+        otel.endSpan(span, 413);
+        if (!res.headersSent) res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload Too Large', message: 'Request body exceeds 10 MB limit' }));
+        settle(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      settle(Buffer.concat(chunks));
+    });
+  });
+}
+
+/**
+ * Apply the sequential body-transform pipeline to the raw inbound body.
+ *
+ * Transforms applied in order:
+ *   1. `bodyTransform` — optional caller-supplied transform
+ *   2. `sanitizeNullToolCallTypes` — strips/normalizes null tool-call types
+ *   3. `injectSteeringMessage` — timeout + token-budget steering (when enabled)
+ *   4. `injectStreamOptions` — adds `stream_options.include_usage`
+ *
+ * @param {Buffer} body
+ * @param {string} provider
+ * @param {import('http').IncomingMessage} req
+ * @param {string} requestId
+ * @param {((body: Buffer) => (Buffer | null | Promise<Buffer | null>)) | null} bodyTransform
+ * @returns {Promise<Buffer>}
+ */
+async function transformRequestBody(body, provider, req, requestId, bodyTransform) {
+  if (bodyTransform && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
+    const transformed = await bodyTransform(body);
+    // Propagate model-policy block sentinel to caller.
+    if (transformed && typeof transformed === 'object' && !Buffer.isBuffer(transformed) && transformed.blocked) {
+      return transformed;
+    }
+    if (transformed) body = transformed;
+  }
+
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+    const sanitized = sanitizeNullToolCallTypes(body);
+    if (sanitized) {
+      body = sanitized.body;
+      logRequest('info', 'request_sanitized', {
+        request_id: requestId,
+        provider,
+        normalized_tool_calls: sanitized.normalizedCount,
+        dropped_tool_calls: sanitized.droppedCount,
+      });
+    }
+  }
+
+  if (isSteeringEnabled() && (req.method === 'POST' || req.method === 'PUT')) {
+    const steeringMessages = [
+      { type: 'timeout', message: getAndClearPendingTimeoutSteeringMessage() },
+      { type: 'token', message: getAndClearPendingSteeringMessage() },
+    ];
+    for (const { type, message } of steeringMessages) {
+      if (!message) continue;
+      const steered = injectSteeringMessage(body, provider, message);
+      if (steered) {
+        body = steered;
+        logRequest('info', `${type}_steering`, {
+          request_id: requestId,
+          provider,
+          message,
+        });
+      }
+    }
+  }
+
+  // Inject stream_options.include_usage so streaming responses include token data
+  if (req.method === 'POST') {
+    const streamOpts = injectStreamOptions(body, provider, req.url);
+    if (streamOpts) {
+      body = streamOpts.body;
+    }
+  }
+
+  return body;
+}
+
 /**
  * Forward a request to the target API, injecting auth headers and routing through Squid.
  *
@@ -417,224 +715,52 @@ function proxyRequest(req, res, targetHost, injectHeaders, provider, basePath = 
 
   const upstreamPath = buildUpstreamPath(req.url, targetHost, basePath);
 
-  const chunks = [];
-  let totalBytes = 0;
-  let rejected = false;
-  let errored = false;
+  // Step 1: collect body (enforces 10 MB limit; returns null if already rejected)
+  collectRequestBody(req, provider, requestId, res, span, startTime, targetHost).then(async (rawBody) => {
+    if (rawBody === null) return;
 
-  req.on('error', (err) => {
-    if (errored) return;
-    errored = true;
-    otel.endSpanError(span, err, 400);
-    handleRequestError(err, {
-      res,
-      requestId,
-      provider,
-      req,
-      targetHost,
-      startTime,
-      statusCode: 400,
-      clientMessage: 'Client error',
-    });
-  });
+    // Step 2: apply transform pipeline
+    const inboundBytes = rawBody.length;
+    const transformResult = await transformRequestBody(rawBody, provider, req, requestId, bodyTransform);
 
-  req.on('data', chunk => {
-    if (rejected || errored) return;
-    totalBytes += chunk.length;
-    if (totalBytes > MAX_BODY_SIZE) {
-      rejected = true;
+    // Model policy blocked the request — return 403 without dispatching upstream.
+    if (transformResult && typeof transformResult === 'object' && !Buffer.isBuffer(transformResult) && transformResult.blocked) {
       const duration = Date.now() - startTime;
       metrics.gaugeDec('active_requests', { provider });
       metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
       logRequest('warn', 'request_complete', {
         request_id: requestId, provider, method: req.method,
-        path: sanitizeForLog(req.url), status: 413, duration_ms: duration,
-        request_bytes: totalBytes, upstream_host: targetHost,
+        path: sanitizeForLog(req.url), status: 403, duration_ms: duration,
+        request_bytes: inboundBytes, upstream_host: targetHost,
+        blocked_model: sanitizeForLog(transformResult.originalModel),
+        block_reason: transformResult.reason,
       });
-      otel.endSpan(span, 413);
-      if (!res.headersSent) res.writeHead(413, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Payload Too Large', message: 'Request body exceeds 10 MB limit' }));
+      otel.endSpan(span, 403);
+      if (!res.headersSent) res.writeHead(403, { 'Content-Type': 'application/json' });
+      const reasonText = transformResult.reason === 'not_in_allowlist'
+        ? 'is not in the configured allowed-models list'
+        : `is blocked by the configured disallowed-models policy${transformResult.pattern ? ` (pattern: ${transformResult.pattern})` : ''}`;
+      res.end(JSON.stringify({
+        error: {
+          message: `Model "${transformResult.originalModel || '(none)'}" ${reasonText}.`,
+          type: 'model_blocked_by_policy',
+          provider,
+          model: transformResult.originalModel || null,
+          reason: transformResult.reason,
+        },
+      }));
       return;
     }
-    chunks.push(chunk);
-  });
 
-  req.on('end', async () => {
-    if (rejected || errored) return;
-    let body = Buffer.concat(chunks);
-    const inboundBytes = body.length;
+    const body = transformResult;
 
-    if (bodyTransform && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
-      const transformed = await bodyTransform(body);
-      if (transformed && typeof transformed === 'object' && !Buffer.isBuffer(transformed) && transformed.blocked) {
-        const duration = Date.now() - startTime;
-        metrics.gaugeDec('active_requests', { provider });
-        metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
-        logRequest('warn', 'request_complete', {
-          request_id: requestId, provider, method: req.method,
-          path: sanitizeForLog(req.url), status: 403, duration_ms: duration,
-          request_bytes: totalBytes, upstream_host: targetHost,
-          blocked_model: sanitizeForLog(transformed.originalModel),
-          block_reason: transformed.reason,
-        });
-        otel.endSpan(span, 403);
-        if (!res.headersSent) res.writeHead(403, { 'Content-Type': 'application/json' });
-        const reasonText = transformed.reason === 'not_in_allowlist'
-          ? 'is not in the configured allowed-models list'
-          : `is blocked by the configured disallowed-models policy${transformed.pattern ? ` (pattern: ${transformed.pattern})` : ''}`;
-        res.end(JSON.stringify({
-          error: {
-            message: `Model "${transformed.originalModel || '(none)'}" ${reasonText}.`,
-            type: 'model_blocked_by_policy',
-            provider,
-            model: transformed.originalModel || null,
-            reason: transformed.reason,
-          },
-        }));
-        return;
-      }
-      if (transformed) body = transformed;
-    }
-
-    if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-      const sanitized = sanitizeNullToolCallTypes(body);
-      if (sanitized) {
-        body = sanitized.body;
-        logRequest('info', 'request_sanitized', {
-          request_id: requestId,
-          provider,
-          normalized_tool_calls: sanitized.normalizedCount,
-          dropped_tool_calls: sanitized.droppedCount,
-        });
-      }
-    }
-
-    if (isSteeringEnabled() && (req.method === 'POST' || req.method === 'PUT')) {
-      const steeringMessages = [
-        { type: 'timeout', message: getAndClearPendingTimeoutSteeringMessage() },
-        { type: 'token', message: getAndClearPendingSteeringMessage() },
-      ];
-      for (const { type, message } of steeringMessages) {
-        if (!message) continue;
-        const steered = injectSteeringMessage(body, provider, message);
-        if (steered) {
-          body = steered;
-          logRequest('info', `${type}_steering`, {
-            request_id: requestId,
-            provider,
-            message,
-          });
-        }
-      }
-    }
-
-    // Inject stream_options.include_usage so streaming responses include token data
-    if (req.method === 'POST') {
-      const streamOpts = injectStreamOptions(body, provider, req.url);
-      if (streamOpts) {
-        body = streamOpts.body;
-      }
-    }
-
-
+    // Step 3: dispatch upstream
     const requestBytes = body.length;
     metrics.increment('request_bytes_total', { provider }, requestBytes);
 
     const headers = buildRequestHeaders(body, inboundBytes, req, { injectHeaders, provider, targetHost, requestId });
 
-    const etBlock = getEffectiveTokenBlockState();
-    if (etBlock && etBlock.maxExceeded) {
-      const duration = Date.now() - startTime;
-      metrics.gaugeDec('active_requests', { provider });
-      metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
-      metrics.observe('request_duration_ms', duration, { provider });
-      logRequest('warn', 'effective_tokens_limit_exceeded', {
-        request_id: requestId,
-        provider,
-        total_effective_tokens: etBlock.totalEffectiveTokens,
-        max_effective_tokens: etBlock.maxEffectiveTokens,
-      });
-      otel.endSpan(span, 429);
-      res.writeHead(429, { 'Content-Type': 'application/json', 'X-Request-ID': requestId });
-      res.end(JSON.stringify(buildEffectiveTokenLimitError(etBlock)));
-      return;
-    }
-
-    const mrBlock = getMaxRunsBlockState();
-    if (mrBlock && mrBlock.maxExceeded) {
-      const duration = Date.now() - startTime;
-      metrics.gaugeDec('active_requests', { provider });
-      metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
-      metrics.observe('request_duration_ms', duration, { provider });
-      logRequest('warn', 'max_runs_exceeded', {
-        request_id: requestId,
-        provider,
-        invocation_count: mrBlock.invocationCount,
-        max_runs: mrBlock.maxRuns,
-      });
-      otel.endSpan(span, 429);
-      res.writeHead(429, { 'Content-Type': 'application/json', 'X-Request-ID': requestId });
-      res.end(JSON.stringify(buildMaxRunsExceededError(mrBlock)));
-      return;
-    }
-
-    const pdBlock = getPermissionDeniedBlockState();
-    if (pdBlock && pdBlock.maxExceeded) {
-      const duration = Date.now() - startTime;
-      metrics.gaugeDec('active_requests', { provider });
-      metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
-      metrics.observe('request_duration_ms', duration, { provider });
-      logRequest('warn', 'permission_denied_limit_exceeded', {
-        request_id: requestId,
-        provider,
-        denied_count: pdBlock.deniedCount,
-        max_permission_denied: pdBlock.maxPermissionDenied,
-      });
-      otel.endSpan(span, 403);
-      res.writeHead(403, { 'Content-Type': 'application/json', 'X-Request-ID': requestId });
-      res.end(JSON.stringify(buildPermissionDeniedLimitError(pdBlock)));
-      return;
-    }
-
-    const aiCreditsBlock = getAiCreditsBlockState();
-    if (aiCreditsBlock && aiCreditsBlock.maxExceeded) {
-      const duration = Date.now() - startTime;
-      metrics.gaugeDec('active_requests', { provider });
-      metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
-      metrics.observe('request_duration_ms', duration, { provider });
-      logRequest('warn', 'ai_credits_limit_exceeded', {
-        request_id: requestId,
-        provider,
-        total_ai_credits: aiCreditsBlock.totalAiCredits,
-        max_ai_credits: aiCreditsBlock.maxAiCredits,
-      });
-      otel.endSpan(span, 429);
-      res.writeHead(429, { 'Content-Type': 'application/json', 'X-Request-ID': requestId });
-      res.end(JSON.stringify(buildAiCreditsLimitError(aiCreditsBlock)));
-      return;
-    }
-
-    if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-      const bodyModel = extractModelFromBody(body);
-      const mmBlock = getModelMultiplierCapBlockState(bodyModel);
-      if (mmBlock) {
-        const duration = Date.now() - startTime;
-        metrics.gaugeDec('active_requests', { provider });
-        metrics.increment('requests_total', { provider, method: req.method, status_class: '4xx' });
-        metrics.observe('request_duration_ms', duration, { provider });
-        logRequest('warn', 'model_multiplier_cap_exceeded', {
-          request_id: requestId,
-          provider,
-          model: mmBlock.model,
-          model_multiplier: mmBlock.multiplier,
-          max_model_multiplier: mmBlock.maxModelMultiplier,
-        });
-        otel.endSpan(span, 400);
-        res.writeHead(400, { 'Content-Type': 'application/json', 'X-Request-ID': requestId });
-        res.end(JSON.stringify(buildModelMultiplierCapError(mmBlock)));
-        return;
-      }
-    }
+    if (enforceGuards({ body, provider, req, res, requestId, startTime, span, inboundBytes })) return;
 
     sendUpstreamRequest(headers, {
       body, targetHost, upstreamPath, req, res, provider, requestId, startTime, span, requestBytes,
@@ -645,6 +771,8 @@ function proxyRequest(req, res, targetHost, injectHeaders, provider, basePath = 
 module.exports = {
   isValidRequestId,
   checkRateLimit,
+  collectRequestBody,
+  transformRequestBody,
   proxyRequest,
   proxyWebSocket,
   extractBillingHeaders,

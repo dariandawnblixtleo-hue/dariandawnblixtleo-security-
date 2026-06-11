@@ -13,7 +13,7 @@ permissions:
 sandbox:
   agent:
     id: awf
-if: needs.check_relevant_changes.outputs.has_changes == 'true'
+if: needs.check_relevant_changes.outputs.has_changes == 'true' && needs.check_relevant_changes.outputs.skip_agent != 'true'
 jobs:
   check_relevant_changes:
     runs-on: ubuntu-latest
@@ -22,27 +22,38 @@ jobs:
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
       changed_count: ${{ steps.check.outputs.changed_count }}
+      skip_agent: ${{ steps.check.outputs.skip_agent }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
       - name: Check for relevant changes
         id: check
         run: |
+          DIFF_PREVIEW=$(mktemp)
           COUNT=$(git log --since="7 days ago" --oneline -- src/ containers/ scripts/ | wc -l | tr -d ' ')
+          git log --since="7 days ago" --format="=== Commit %H: %s ===" --stat -- src/ containers/ scripts/ docs/ '*.md' | head -30 > "$DIFF_PREVIEW"
+          DIFF_BYTES=$(wc -c < "$DIFF_PREVIEW" | tr -d ' ')
+          DIFF_LINES=$(wc -l < "$DIFF_PREVIEW" | tr -d ' ')
           HAS_CHANGES=false
+          SKIP_AGENT=false
           if [ "$COUNT" -gt 0 ]; then
             HAS_CHANGES=true
+          fi
+          if [ "$HAS_CHANGES" = "true" ] && [ "$DIFF_LINES" -lt 3 ]; then
+            SKIP_AGENT=true
+            echo "::warning::Recent diffs are minimal ($DIFF_LINES lines, $DIFF_BYTES bytes). Skipping agent run."
           fi
           {
             echo "changed_count=$COUNT"
             echo "has_changes=$HAS_CHANGES"
+            echo "skip_agent=$SKIP_AGENT"
           } >> "$GITHUB_OUTPUT"
+max-turns: 6
 engine:
   id: claude
   model: claude-haiku-4-5
-  max-turns: 10
 tools:
   edit:
   bash: false
@@ -79,24 +90,24 @@ steps:
         find . -maxdepth 1 -name "*.md"
       } | sort > "$DOC_POOL"
 
-      git log --since="7 days ago" --format="=== Commit %H: %s ===" --patch --stat --unified=1 -- src/ containers/ scripts/ docs/ '*.md' | grep -v '^Binary' | head -100 > "$CONTEXT_DIR/recent-diffs.txt"
+      git log --since="7 days ago" --format="=== Commit %H: %s ===" --stat -- src/ containers/ scripts/ docs/ '*.md' | head -30 > "$CONTEXT_DIR/recent-diffs.txt"
 
       git log --since="7 days ago" --format="%H" -- src/ containers/ scripts/ | \
         while read -r sha; do
           git show --name-only --format="" "$sha" -- docs/ '*.md' 2>/dev/null
-        done | grep -E '(^docs/.*\.md$|^[^/]+\.md$)' | sort -u | head -10 > "$AFFECTED" || true
+        done | grep -E '(^docs/.*\.md$|^[^/]+\.md$)' | sort -u | head -3 > "$AFFECTED" || true
 
       if [ ! -s "$AFFECTED" ]; then
         git log --since="7 days ago" --name-only --format="" -- src/ containers/ scripts/ | \
           grep -v '^$' | sed -E 's|.*/||; s|\.[^.]+$||' | \
           tr '[:upper:]' '[:lower:]' | tr '[:punct:]' '\n' | grep -E '^[a-z0-9]{3,}$' | sort -u > "$TOKENS" || true
         if [ -s "$TOKENS" ]; then
-          grep -i -F -f "$TOKENS" "$DOC_POOL" | head -10 > "$AFFECTED" || true
+          grep -i -F -f "$TOKENS" "$DOC_POOL" | head -3 > "$AFFECTED" || true
         fi
       fi
 
       if [ ! -s "$AFFECTED" ]; then
-        head -10 "$DOC_POOL" > "$AFFECTED"
+        head -3 "$DOC_POOL" > "$AFFECTED"
       fi
 
       cp "$AFFECTED" "$CONTEXT_DIR/affected-docs.txt"
@@ -111,6 +122,45 @@ steps:
         echo "## Recent Git Diffs"
         cat "$CONTEXT_DIR/recent-diffs.txt"
       } > "$CONTEXT_DIR/context.md"
+
+      CONTEXT_SIZE=$(wc -c < "$CONTEXT_DIR/context.md" | tr -d ' ')
+      DIFF_LINES=$(wc -l < "$CONTEXT_DIR/recent-diffs.txt" | tr -d ' ')
+      echo "Context size: ${CONTEXT_SIZE} bytes"
+      echo "Diff lines: ${DIFF_LINES}"
+      cat "$CONTEXT_DIR/affected-docs.txt" || echo "(empty)"
+      if [ "$CONTEXT_SIZE" -lt 100 ]; then
+        echo "::warning::Context file is empty or minimal ($CONTEXT_SIZE bytes). Skipping agent run."
+        echo "skip_agent=true" >> "$GITHUB_OUTPUT"
+      else
+        echo "skip_agent=false" >> "$GITHUB_OUTPUT"
+      fi
+  - name: Pre-load affected documentation content
+    run: |
+      CONTEXT_DIR=/tmp/gh-aw/doc-maintainer-context
+      AFFECTED="$CONTEXT_DIR/affected-docs.txt"
+
+      if [ ! -s "$AFFECTED" ]; then
+        echo "No affected docs to pre-load"
+        exit 0
+      fi
+
+      {
+        echo ""
+        echo "## Affected Documentation Content (pre-loaded — do not re-read these files)"
+        echo ""
+        head -3 "$AFFECTED" | while read -r doc; do
+          if [ -f "$doc" ]; then
+            echo "### File: $doc"
+            echo '```'
+            head -80 "$doc"
+            echo '```'
+            echo ""
+          fi
+        done
+      } >> "$CONTEXT_DIR/context.md"
+
+      SIZE=$(wc -c < "$CONTEXT_DIR/context.md" | tr -d ' ')
+      echo "Final context.md size: ${SIZE} bytes"
 ---
 
 # Documentation Maintainer
@@ -139,7 +189,9 @@ Use the **Recent Git Diffs** section from that file as your **sole source** for 
 
 ### 2. Identify Documentation Gaps
 
-Review only the files listed under **Affected Documentation** in `/tmp/gh-aw/doc-maintainer-context/context.md` (max 10 files) and identify what needs to be updated. Do not proactively read additional files not in this list.
+The first 80 lines of up to 3 affected documentation files are pre-loaded in `context.md` under **Affected Documentation Content**. Read from `context.md` directly and only re-read a file with the `edit` tool when you need content beyond the pre-loaded preview.
+
+Review only the files listed under **Affected Documentation** in `/tmp/gh-aw/doc-maintainer-context/context.md` (max 3 files) and identify what needs to be updated. Do not proactively read additional files not in this list.
 
 ### 3. Verify Code Examples
 
@@ -165,10 +217,5 @@ Keep updates:
 After making updates, the safe-outputs system will automatically create a PR. Include in your changes:
 
 **PR Description**: Summarize updated docs, reference the triggering code changes, and list what was verified.
-
-## Guidelines
-
-- Be conservative, accurate, minimal, and consistent with existing style.
-- Reference the commits that triggered your updates.
 
 **Success**: Review 7-day commits, update out-of-sync docs, verify examples, and create a clear PR summary.
