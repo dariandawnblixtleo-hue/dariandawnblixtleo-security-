@@ -1,3 +1,20 @@
+// Module-level mock functions for fs — must be declared before jest.mock('fs')
+// so the factory can close over them. jest.mock is hoisted but the factory runs
+// lazily after module initialisation, when these variables are defined.
+const mockMkdirSync = jest.fn();
+const mockWriteFileSync = jest.fn();
+const mockChmodSync = jest.fn();
+
+jest.mock('fs', () => {
+  const actual = jest.requireActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
+    writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+    chmodSync: (...args: unknown[]) => mockChmodSync(...args),
+  };
+});
+
 import { createMainAction } from './main-action';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -371,6 +388,83 @@ describe('createMainAction', () => {
       expect(serialized).not.toContain('ghp-secret');
       expect(serialized).not.toContain('cop-secret');
       expect(serialized).not.toContain('gem-secret');
+    });
+  });
+
+  describe('resolved config artifact', () => {
+    beforeEach(() => {
+      mockMkdirSync.mockReset();
+      mockWriteFileSync.mockReset();
+      mockChmodSync.mockReset();
+    });
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('writes awf-resolved-config.json to audit dir when set', async () => {
+      const configWithAudit = {
+        ...STUB_CONFIG,
+        auditDir: '/tmp/awf-audit',
+      };
+      mockedValidateOptions.validateOptions.mockReturnValue(
+        configWithAudit as unknown as import('../types').WrapperConfig
+      );
+      const action = createMainAction(getOptionValueSource);
+      await action(['echo hi'], {});
+
+      expect(mockMkdirSync).toHaveBeenCalledWith('/tmp/awf-audit', { recursive: true, mode: 0o755 });
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        '/tmp/awf-audit/awf-resolved-config.json',
+        expect.stringContaining('"allowedDomains"'),
+        { mode: 0o644 },
+      );
+      expect(mockChmodSync).toHaveBeenCalledWith('/tmp/awf-audit/awf-resolved-config.json', 0o644);
+      // Verify secret key names are excluded from the artifact
+      const written = mockWriteFileSync.mock.calls.find(
+        (c) => String(c[0]).includes('awf-resolved-config.json')
+      );
+      expect(written).toBeDefined();
+      const writtenJson = String(written![1]);
+      expect(writtenJson).not.toContain('ApiKey');
+      expect(writtenJson).not.toContain('GithubToken');
+    });
+
+    it('redacts secret values in agentCommand in the artifact', async () => {
+      const secretValue = 'super-secret-token-12345';
+      const configWithSecret = {
+        ...STUB_CONFIG,
+        auditDir: '/tmp/awf-audit',
+        agentCommand: `my-agent --token ${secretValue}`,
+      };
+      mockedValidateOptions.validateOptions.mockReturnValue(
+        configWithSecret as unknown as import('../types').WrapperConfig
+      );
+      // Make redactSecrets actually remove the secret value
+      mockedRedactSecrets.redactSecrets.mockImplementation((s: string) =>
+        s.replace(secretValue, '[REDACTED]')
+      );
+
+      const action = createMainAction(getOptionValueSource);
+      await action(['echo hi'], {});
+
+      const written = mockWriteFileSync.mock.calls.find(
+        (c) => String(c[0]).includes('awf-resolved-config.json')
+      );
+      expect(written).toBeDefined();
+      const writtenJson = String(written![1]);
+      expect(writtenJson).not.toContain(secretValue);
+      expect(writtenJson).toContain('[REDACTED]');
+    });
+
+    it('falls back to workDir/audit when auditDir is not set', async () => {
+      mockedValidateOptions.validateOptions.mockReturnValue(STUB_CONFIG);
+      const action = createMainAction(getOptionValueSource);
+      await action(['echo hi'], {});
+
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        '/tmp/awf-test/audit/awf-resolved-config.json',
+        expect.any(String),
+        { mode: 0o644 },
+      );
     });
   });
 });
