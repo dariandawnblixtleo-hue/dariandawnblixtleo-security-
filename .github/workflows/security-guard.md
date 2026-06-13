@@ -11,8 +11,8 @@ permissions:
   issues: read
 max-turns: 6
 engine:
-  id: claude
-  model: claude-sonnet-4-5
+  id: copilot
+  model: claude-sonnet-4.5
 tools:
   github:
     mode: gh-proxy

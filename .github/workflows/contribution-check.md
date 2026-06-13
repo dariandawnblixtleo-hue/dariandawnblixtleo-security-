@@ -11,8 +11,8 @@ permissions:
   issues: read
 max-turns: 5
 engine:
-  id: claude
-  model: claude-haiku-4-5
+  id: copilot
+  model: claude-haiku-4.5
 tools:
   github:
     mode: gh-proxy
