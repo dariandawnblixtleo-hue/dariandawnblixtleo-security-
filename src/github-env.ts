@@ -32,15 +32,14 @@ export function extractGhHostFromServerUrl(serverUrl: string | undefined): strin
 }
 
 /**
- * Reads path entries from the $GITHUB_PATH file used by GitHub Actions.
+ * Reads path entries from the current step's $GITHUB_PATH command file.
  *
- * When setup-* actions (e.g., setup-ruby, setup-dart, setup-python) run before AWF,
- * they add tool paths to the $GITHUB_PATH file. The Actions runner prepends these
- * to $PATH for subsequent steps, but if `sudo` resets PATH (depending on sudoers
- * configuration), those entries may be lost by the time AWF reads process.env.PATH.
- *
- * This function reads the $GITHUB_PATH file directly and returns any path entries
- * found, so they can be merged into AWF_HOST_PATH regardless of sudo behavior.
+ * The Actions runner consumes each step's GITHUB_PATH file after that step
+ * completes and folds those entries into PATH for later steps. This only
+ * recovers paths written earlier in the same step before AWF starts; it does
+ * not recover setup-* paths from previous steps after sudo secure_path strips
+ * PATH. Tool-cache paths from previous setup-* steps are recovered separately
+ * from RUNNER_TOOL_CACHE.
  *
  * @returns Array of path entries from the $GITHUB_PATH file, or empty array if unavailable
  * @internal Exported for testing
