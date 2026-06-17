@@ -442,6 +442,44 @@ describe('agent service', () => {
       }
     });
 
+    it('should merge RUNNER_TOOL_CACHE bin directories into AWF_HOST_PATH', () => {
+      const toolCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-'));
+      const nodeBinDir = path.join(toolCacheDir, 'node', '24.16.0', 'x64', 'bin');
+      fs.mkdirSync(nodeBinDir, { recursive: true });
+
+      const originalGithubPath = process.env.GITHUB_PATH;
+      const originalPath = process.env.PATH;
+      const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
+      delete process.env.GITHUB_PATH;
+      process.env.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+      process.env.RUNNER_TOOL_CACHE = toolCacheDir;
+
+      try {
+        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
+        const env = result.services.agent.environment as Record<string, string>;
+
+        expect(env.AWF_HOST_PATH).toContain(nodeBinDir);
+        expect(env.AWF_HOST_PATH).toContain('/usr/local/bin');
+        expect(env.AWF_HOST_PATH.indexOf(nodeBinDir))
+          .toBeLessThan(env.AWF_HOST_PATH.indexOf('/usr/local/bin'));
+      } finally {
+        if (originalGithubPath !== undefined) {
+          process.env.GITHUB_PATH = originalGithubPath;
+        } else {
+          delete process.env.GITHUB_PATH;
+        }
+        if (originalPath !== undefined) {
+          process.env.PATH = originalPath;
+        }
+        if (originalRunnerToolCache !== undefined) {
+          process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
+        } else {
+          delete process.env.RUNNER_TOOL_CACHE;
+        }
+        fs.rmSync(toolCacheDir, { recursive: true, force: true });
+      }
+    });
+
     it('should not duplicate PATH entries from GITHUB_PATH', () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-gp-'));
       const pathFile = path.join(tmpDir, 'add_path');
