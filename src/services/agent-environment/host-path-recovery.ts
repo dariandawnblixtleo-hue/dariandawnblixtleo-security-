@@ -13,7 +13,6 @@ export function recoverHostPaths(environment: Record<string, string>): void {
   if (process.env.PATH) {
     const runnerToolCacheBinDirs = discoverRunnerToolCacheBinDirs(
       process.env.RUNNER_TOOL_CACHE,
-      process.env.PATH,
     );
     environment.AWF_HOST_PATH = prependPathEntries(process.env.PATH, runnerToolCacheBinDirs);
     if (runnerToolCacheBinDirs.length > 0) {
@@ -38,7 +37,6 @@ export function recoverHostPaths(environment: Record<string, string>): void {
 
 function discoverRunnerToolCacheBinDirs(
   runnerToolCache: string | undefined,
-  currentPath: string,
 ): string[] {
   if (!runnerToolCache) {
     return [];
@@ -84,17 +82,12 @@ function discoverRunnerToolCacheBinDirs(
       break;
     }
 
-    // Skip if any executable already present in this bin dir is already on PATH.
-    // This is fully data-driven: no hardcoded tool→binary mapping needed.
+    // Use the first entry (newest version after reverse-sort).
+    // Deduplication against the current PATH is handled by prependPathEntries.
     const candidateBinDir = toolBinDirs[0];
-    if (!candidateBinDir) continue;
-
-    if (anyBinAlreadyOnPath(candidateBinDir, currentPath)) {
-      continue;
+    if (candidateBinDir) {
+      selectedBinDirs.push(candidateBinDir);
     }
-
-    // Use the first discovered entry (newest version after reverse-sort).
-    selectedBinDirs.push(candidateBinDir);
   }
 
   return selectedBinDirs;
@@ -116,23 +109,4 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
-/**
- * Returns true if any executable inside binDir already appears (by name) on
- * currentPath. Used to avoid injecting a toolcache bin dir when the tool is
- * already reachable — no hardcoded tool/binary mapping required.
- */
-function anyBinAlreadyOnPath(binDir: string, currentPath: string): boolean {
-  const entries = safeReadDir(binDir);
-  for (const name of entries) {
-    for (const pathEntry of currentPath.split(path.delimiter)) {
-      if (!pathEntry) continue;
-      try {
-        fs.accessSync(path.join(pathEntry, name), fs.constants.X_OK);
-        return true;
-      } catch {
-        // not found in this path entry
-      }
-    }
-  }
-  return false;
-}
+

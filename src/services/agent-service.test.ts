@@ -499,28 +499,25 @@ describe('agent service', () => {
       }
     });
 
-    it('should avoid adding toolcache bins for tools already present on PATH', () => {
+    it('should not add toolcache bin dir if it is already present in PATH', () => {
       const toolCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-'));
       const nodeBinDir = path.join(toolCacheDir, 'node', '24.16.0', 'x64', 'bin');
       fs.mkdirSync(nodeBinDir, { recursive: true });
-      fs.writeFileSync(path.join(nodeBinDir, 'node'), '#!/bin/sh\necho node\n', { mode: 0o755 });
 
       const originalPath = process.env.PATH;
       const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
-      const pathDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-path-bin-'));
-      fs.writeFileSync(path.join(pathDir, 'node'), '#!/bin/sh\necho node\n', { mode: 0o755 });
-      process.env.PATH = `${pathDir}:/usr/bin:/bin`;
+      // The toolcache bin dir is already in PATH — prependPathEntries should not add it again.
+      process.env.PATH = `${nodeBinDir}:/usr/bin:/bin`;
       process.env.RUNNER_TOOL_CACHE = toolCacheDir;
 
       try {
         const result = generateDockerCompose(mockConfig, mockNetworkConfig);
         const env = result.services.agent.environment as Record<string, string>;
-        expect(env.AWF_HOST_PATH).toBe(`${pathDir}:/usr/bin:/bin`);
+        expect(env.AWF_HOST_PATH).toBe(`${nodeBinDir}:/usr/bin:/bin`);
       } finally {
         if (originalPath !== undefined) process.env.PATH = originalPath;
         if (originalRunnerToolCache !== undefined) process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
         else delete process.env.RUNNER_TOOL_CACHE;
-        fs.rmSync(pathDir, { recursive: true, force: true });
         fs.rmSync(toolCacheDir, { recursive: true, force: true });
       }
     });
