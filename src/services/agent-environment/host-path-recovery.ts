@@ -9,18 +9,6 @@ import { logger } from '../../logger';
 
 const MAX_RECOVERED_TOOLCACHE_BINS = 12;
 
-// Probe commands used to determine whether a tool is already available on PATH.
-const TOOL_PROBE_BINARIES: Record<string, string> = {
-  node: 'node',
-  python: 'python3',
-  ruby: 'ruby',
-  go: 'go',
-  uv: 'uv',
-  dotnet: 'dotnet',
-  java: 'java',
-  rust: 'rustc',
-};
-
 export function recoverHostPaths(environment: Record<string, string>): void {
   if (process.env.PATH) {
     const runnerToolCacheBinDirs = discoverRunnerToolCacheBinDirs(
@@ -87,20 +75,26 @@ function discoverRunnerToolCacheBinDirs(
   }
 
   const selectedBinDirs: string[] = [];
-  for (const [toolName, toolBinDirs] of [...binDirsByTool.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  const sortedToolBinDirs = [...binDirsByTool.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, dirs]) => dirs);
+
+  for (const toolBinDirs of sortedToolBinDirs) {
     if (selectedBinDirs.length >= MAX_RECOVERED_TOOLCACHE_BINS) {
       break;
     }
 
-    const probeBinary = TOOL_PROBE_BINARIES[toolName];
-    if (probeBinary && isExecutableOnPath(probeBinary, currentPath)) {
+    // Skip if any executable already present in this bin dir is already on PATH.
+    // This is fully data-driven: no hardcoded tool→binary mapping needed.
+    const candidateBinDir = toolBinDirs[0];
+    if (!candidateBinDir) continue;
+
+    if (anyBinAlreadyOnPath(candidateBinDir, currentPath)) {
       continue;
     }
 
-    // Use the first discovered entry after reverse version sort (newest-first).
-    if (toolBinDirs[0]) {
-      selectedBinDirs.push(toolBinDirs[0]);
-    }
+    // Use the first discovered entry (newest version after reverse-sort).
+    selectedBinDirs.push(candidateBinDir);
   }
 
   return selectedBinDirs;
@@ -122,15 +116,22 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
-function isExecutableOnPath(binaryName: string, currentPath: string): boolean {
-  for (const pathEntry of currentPath.split(path.delimiter)) {
-    if (!pathEntry) continue;
-    const candidate = path.join(pathEntry, binaryName);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return true;
-    } catch {
-      // ignore missing/non-executable entries
+/**
+ * Returns true if any executable inside binDir already appears (by name) on
+ * currentPath. Used to avoid injecting a toolcache bin dir when the tool is
+ * already reachable — no hardcoded tool/binary mapping required.
+ */
+function anyBinAlreadyOnPath(binDir: string, currentPath: string): boolean {
+  const entries = safeReadDir(binDir);
+  for (const name of entries) {
+    for (const pathEntry of currentPath.split(path.delimiter)) {
+      if (!pathEntry) continue;
+      try {
+        fs.accessSync(path.join(pathEntry, name), fs.constants.X_OK);
+        return true;
+      } catch {
+        // not found in this path entry
+      }
     }
   }
   return false;
