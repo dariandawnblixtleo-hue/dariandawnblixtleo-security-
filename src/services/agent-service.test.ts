@@ -494,7 +494,10 @@ describe('agent service', () => {
         } else {
           delete process.env.RUNNER_TOOL_CACHE;
         }
-        try { fs.rmSync(tmpFile, { force: true }); } catch {}
+        // eslint-disable-next-line no-empty,@typescript-eslint/no-unused-vars
+        try { fs.rmSync(tmpFile, { force: true }); } catch (_e) {
+          // File may not exist, safe to ignore
+        }
       }
     });
 
