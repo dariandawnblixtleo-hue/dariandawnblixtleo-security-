@@ -522,6 +522,77 @@ describe('agent service', () => {
       }
     });
 
+    it('should ignore RUNNER_TOOL_CACHE when it points to a nonexistent path', () => {
+      const originalPath = process.env.PATH;
+      const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
+
+      process.env.PATH = '/usr/local/bin:/usr/bin';
+      process.env.RUNNER_TOOL_CACHE = '/tmp/awf-nonexistent-path-that-does-not-exist';
+
+      try {
+        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
+        const env = result.services.agent.environment as Record<string, string>;
+        expect(env.AWF_HOST_PATH).toBe('/usr/local/bin:/usr/bin');
+      } finally {
+        if (originalPath !== undefined) process.env.PATH = originalPath;
+        if (originalRunnerToolCache !== undefined) process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
+        else delete process.env.RUNNER_TOOL_CACHE;
+      }
+    });
+
+    it('should pick only one bin dir when two tool dirs share the same lowercase name', () => {
+      // Simulates a case-insensitive FS or a toolcache with duplicate-cased tool dirs.
+      const toolCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-'));
+      const bin1 = path.join(toolCacheDir, 'Node', '20.0.0', 'x64', 'bin');
+      const bin2 = path.join(toolCacheDir, 'node', '22.0.0', 'x64', 'bin');
+      fs.mkdirSync(bin1, { recursive: true });
+      fs.mkdirSync(bin2, { recursive: true });
+
+      const originalPath = process.env.PATH;
+      const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
+      process.env.PATH = '/usr/bin';
+      process.env.RUNNER_TOOL_CACHE = toolCacheDir;
+
+      try {
+        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
+        const env = result.services.agent.environment as Record<string, string>;
+        const addedDirs = env.AWF_HOST_PATH.split(':').filter(d => d.startsWith(toolCacheDir));
+        expect(addedDirs).toHaveLength(1);
+      } finally {
+        if (originalPath !== undefined) process.env.PATH = originalPath;
+        if (originalRunnerToolCache !== undefined) process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
+        else delete process.env.RUNNER_TOOL_CACHE;
+        fs.rmSync(toolCacheDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should pick only the first architecture when a tool version has multiple', () => {
+      const toolCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-'));
+      const binArm = path.join(toolCacheDir, 'node', '20.0.0', 'arm64', 'bin');
+      const binX64 = path.join(toolCacheDir, 'node', '20.0.0', 'x64', 'bin');
+      fs.mkdirSync(binArm, { recursive: true });
+      fs.mkdirSync(binX64, { recursive: true });
+
+      const originalPath = process.env.PATH;
+      const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
+      process.env.PATH = '/usr/bin';
+      process.env.RUNNER_TOOL_CACHE = toolCacheDir;
+
+      try {
+        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
+        const env = result.services.agent.environment as Record<string, string>;
+        const addedDirs = env.AWF_HOST_PATH.split(':').filter(d => d.startsWith(toolCacheDir));
+        // Only arm64 (alphabetically first) should be added, not both.
+        expect(addedDirs).toHaveLength(1);
+        expect(addedDirs[0]).toBe(binArm);
+      } finally {
+        if (originalPath !== undefined) process.env.PATH = originalPath;
+        if (originalRunnerToolCache !== undefined) process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
+        else delete process.env.RUNNER_TOOL_CACHE;
+        fs.rmSync(toolCacheDir, { recursive: true, force: true });
+      }
+    });
+
     it('should skip non-directory entries inside RUNNER_TOOL_CACHE', () => {
       const toolCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-'));
       // create a top-level file entry
