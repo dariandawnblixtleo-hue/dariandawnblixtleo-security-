@@ -32,39 +32,6 @@ export function extractGhHostFromServerUrl(serverUrl: string | undefined): strin
 }
 
 /**
- * Reads path entries from the current step's $GITHUB_PATH command file.
- *
- * The Actions runner consumes each step's GITHUB_PATH file after that step
- * completes and folds those entries into PATH for later steps. This only
- * recovers paths written earlier in the same step before AWF starts; it does
- * not recover setup-* paths from previous steps after sudo secure_path strips
- * PATH. Tool-cache paths from previous setup-* steps are recovered separately
- * from RUNNER_TOOL_CACHE.
- *
- * @returns Array of path entries from the $GITHUB_PATH file, or empty array if unavailable
- * @internal Exported for testing
- */
-export function readGitHubPathEntries(): string[] {
-  const githubPathFile = process.env.GITHUB_PATH;
-  if (!githubPathFile) {
-    logger.debug('GITHUB_PATH env var is not set; skipping $GITHUB_PATH file merge (tools installed by setup-* actions may be missing from PATH if sudo reset it)');
-    return [];
-  }
-
-  try {
-    const content = fs.readFileSync(githubPathFile, 'utf-8');
-    return content
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-  } catch {
-    // File doesn't exist or isn't readable — expected outside GitHub Actions
-    logger.debug(`GITHUB_PATH file at '${githubPathFile}' could not be read; skipping file merge`);
-    return [];
-  }
-}
-
-/**
  * Reads key-value environment entries from the $GITHUB_ENV file.
  *
  * The Actions runner writes to this file when steps call `core.exportVariable()`.
@@ -161,18 +128,8 @@ export const TOOLCHAIN_ENV_VARS = [
   'BUN_INSTALL',
 ] as const;
 
-/**
- * Merges path entries from the $GITHUB_PATH file into a PATH string.
- * Entries from $GITHUB_PATH are prepended (they have higher priority, matching
- * how the Actions runner processes them). Duplicate entries are removed.
- *
- * @param currentPath - The current PATH string (e.g., from process.env.PATH)
- * @param githubPathEntries - Path entries read from the $GITHUB_PATH file
- * @returns Merged PATH string with $GITHUB_PATH entries prepended
- * @internal Exported for testing
- */
-export function mergeGitHubPathEntries(currentPath: string, githubPathEntries: string[]): string {
-  if (githubPathEntries.length === 0) {
+export function prependPathEntries(currentPath: string, pathEntries: string[]): string {
+  if (pathEntries.length === 0) {
     return currentPath;
   }
 
@@ -180,13 +137,12 @@ export function mergeGitHubPathEntries(currentPath: string, githubPathEntries: s
   const currentSet = new Set(currentEntries);
 
   // Only add entries that aren't already in the current PATH
-  const newEntries = githubPathEntries.filter(entry => !currentSet.has(entry));
+  const newEntries = pathEntries.filter(entry => !currentSet.has(entry));
 
   if (newEntries.length === 0) {
     return currentPath;
   }
 
-  // Prepend new entries (setup-* actions expect their paths to have priority)
   return [...newEntries, ...currentEntries].join(':');
 }
 

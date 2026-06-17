@@ -164,31 +164,22 @@ The following environment variables are set internally by the firewall and used 
 Tools installed by GitHub Actions `setup-*` actions (e.g., `astral-sh/setup-uv`, `actions/setup-node`, `ruby/setup-ruby`, `actions/setup-python`) are **automatically available inside the AWF chroot** when their installation paths can be recovered from the runner environment. AWF builds `AWF_HOST_PATH` from:
 
 1. The `PATH` visible to the `awf` process at startup.
-2. Entries in the current step's `$GITHUB_PATH` command file, if any were written before AWF starts.
-3. Bin directories discovered under `RUNNER_TOOL_CACHE` (for tools installed by setup actions into the Actions tool cache, such as `actions/setup-node`).
+2. Bin directories discovered under `RUNNER_TOOL_CACHE` (for tools installed by setup actions into the Actions tool cache, such as `actions/setup-node`).
 
 The chroot entrypoint exports `AWF_HOST_PATH` as `PATH` inside the chroot, so tools like `uv`, `node`, `python3`, `ruby`, etc. resolve correctly.
 
 This behavior was introduced in **awf v0.60.0** and is active automatically — no extra flags are required.
 
-**Important:** `$GITHUB_PATH` is a per-step command file. The Actions runner consumes each step's file after that step completes and folds those entries into `PATH` for later steps. AWF can read entries written earlier in the same step before AWF starts, but it cannot read historical `$GITHUB_PATH` entries from previous setup steps. For previous setup steps, AWF relies on the inherited `PATH` and `RUNNER_TOOL_CACHE` recovery.
+**Important:** `$GITHUB_PATH` is a per-step command file. The Actions runner consumes each step's file after that step completes and folds those entries into `PATH` for later steps. AWF does not read `$GITHUB_PATH` for path recovery; for previous setup steps, AWF relies on the inherited `PATH` and `RUNNER_TOOL_CACHE` recovery.
 
-**Fallback behavior:** If `GITHUB_PATH` and `RUNNER_TOOL_CACHE` are not set (e.g., outside GitHub Actions), AWF uses `process.env.PATH` as the chroot PATH. If `sudo` has reset `PATH` before AWF runs and no tool-cache location is available, the tool's directory may be missing from the chroot PATH. In that case, invoke the tool via its absolute path or preserve the required path when invoking AWF.
+**Fallback behavior:** If `RUNNER_TOOL_CACHE` is not set (e.g., outside GitHub Actions), AWF uses `process.env.PATH` as the chroot PATH. If `sudo` has reset `PATH` before AWF runs and no tool-cache location is available, the tool's directory may be missing from the chroot PATH. In that case, invoke the tool via its absolute path or preserve the required path when invoking AWF.
 
-**Troubleshooting:** Run AWF with `--log-level debug` to see whether `GITHUB_PATH` is set and how many entries were merged:
+**Troubleshooting:** Run AWF with `--log-level debug` to see how many runner tool cache entries were merged:
 
 ```
-[DEBUG] Merged 3 path(s) from $GITHUB_PATH into AWF_HOST_PATH
 [DEBUG] Merged 1 runner tool cache bin path(s) into AWF_HOST_PATH
 ```
-
-If you see instead:
-
-```
-[DEBUG] GITHUB_PATH env var is not set; skipping $GITHUB_PATH file merge …
-```
-
-the current step did not have any `$GITHUB_PATH` entries for AWF to merge. If the missing tool was installed by a previous setup step, verify that `RUNNER_TOOL_CACHE` is set and points at the Actions tool cache.
+If the missing tool was installed by a previous setup step, verify that `RUNNER_TOOL_CACHE` is set and points at the Actions tool cache.
 
 ## Debugging Environment Variables
 

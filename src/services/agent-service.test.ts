@@ -384,7 +384,7 @@ describe('agent service', () => {
     });
   });
 
-  describe('generateDockerCompose - GITHUB_PATH integration', () => {
+  describe('generateDockerCompose - host PATH recovery', () => {
     let mockConfig: WrapperConfig;
 
     const mockNetworkConfig = {
@@ -408,38 +408,6 @@ describe('agent service', () => {
 
     afterEach(() => {
       fs.rmSync(mockConfig.workDir, { recursive: true, force: true });
-    });
-
-    it('should merge GITHUB_PATH entries into AWF_HOST_PATH', () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-gp-'));
-      const pathFile = path.join(tmpDir, 'add_path');
-      fs.writeFileSync(pathFile, '/opt/hostedtoolcache/Ruby/3.3.10/x64/bin\n');
-
-      const originalGithubPath = process.env.GITHUB_PATH;
-      const originalPath = process.env.PATH;
-      process.env.GITHUB_PATH = pathFile;
-      process.env.PATH = '/usr/local/bin:/usr/bin';
-
-      try {
-        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
-        const env = result.services.agent.environment as Record<string, string>;
-
-        expect(env.AWF_HOST_PATH).toContain('/opt/hostedtoolcache/Ruby/3.3.10/x64/bin');
-        expect(env.AWF_HOST_PATH).toContain('/usr/local/bin');
-        // Ruby path should be prepended
-        expect(env.AWF_HOST_PATH.indexOf('/opt/hostedtoolcache/Ruby/3.3.10/x64/bin'))
-          .toBeLessThan(env.AWF_HOST_PATH.indexOf('/usr/local/bin'));
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
-        if (originalPath !== undefined) {
-          process.env.PATH = originalPath;
-        }
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
     });
 
     it('should merge RUNNER_TOOL_CACHE bin directories into AWF_HOST_PATH', () => {
@@ -480,41 +448,11 @@ describe('agent service', () => {
       }
     });
 
-    it('should not duplicate PATH entries from GITHUB_PATH', () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-gp-'));
-      const pathFile = path.join(tmpDir, 'add_path');
-      fs.writeFileSync(pathFile, '/usr/local/bin\n');
-
-      const originalGithubPath = process.env.GITHUB_PATH;
+    it('should use PATH when RUNNER_TOOL_CACHE is not set', () => {
       const originalPath = process.env.PATH;
-      process.env.GITHUB_PATH = pathFile;
+      const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
       process.env.PATH = '/usr/local/bin:/usr/bin';
-
-      try {
-        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
-        const env = result.services.agent.environment as Record<string, string>;
-
-        // /usr/local/bin should appear exactly once
-        const occurrences = env.AWF_HOST_PATH.split(':').filter(p => p === '/usr/local/bin').length;
-        expect(occurrences).toBe(1);
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
-        if (originalPath !== undefined) {
-          process.env.PATH = originalPath;
-        }
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    it('should work when GITHUB_PATH is not set', () => {
-      const originalGithubPath = process.env.GITHUB_PATH;
-      const originalPath = process.env.PATH;
-      delete process.env.GITHUB_PATH;
-      process.env.PATH = '/usr/local/bin:/usr/bin';
+      delete process.env.RUNNER_TOOL_CACHE;
 
       try {
         const result = generateDockerCompose(mockConfig, mockNetworkConfig);
@@ -522,13 +460,13 @@ describe('agent service', () => {
 
         expect(env.AWF_HOST_PATH).toBe('/usr/local/bin:/usr/bin');
       } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
         if (originalPath !== undefined) {
           process.env.PATH = originalPath;
+        }
+        if (originalRunnerToolCache !== undefined) {
+          process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
+        } else {
+          delete process.env.RUNNER_TOOL_CACHE;
         }
       }
     });

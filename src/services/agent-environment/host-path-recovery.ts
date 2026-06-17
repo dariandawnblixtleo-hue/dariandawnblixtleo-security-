@@ -1,8 +1,7 @@
 import {
   TOOLCHAIN_ENV_VARS,
   readGitHubEnvEntries,
-  readGitHubPathEntries,
-  mergeGitHubPathEntries,
+  prependPathEntries,
 } from '../../github-env';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,17 +9,10 @@ import { logger } from '../../logger';
 
 export function recoverHostPaths(environment: Record<string, string>): void {
   if (process.env.PATH) {
-    const githubPathEntries = readGitHubPathEntries();
     const runnerToolCacheBinDirs = discoverRunnerToolCacheBinDirs(process.env.RUNNER_TOOL_CACHE);
-    environment.AWF_HOST_PATH = mergeGitHubPathEntries(process.env.PATH, [
-      ...runnerToolCacheBinDirs,
-      ...githubPathEntries,
-    ]);
+    environment.AWF_HOST_PATH = prependPathEntries(process.env.PATH, runnerToolCacheBinDirs);
     if (runnerToolCacheBinDirs.length > 0) {
       logger.debug(`Merged ${runnerToolCacheBinDirs.length} runner tool cache bin path(s) into AWF_HOST_PATH`);
-    }
-    if (githubPathEntries.length > 0) {
-      logger.debug(`Merged ${githubPathEntries.length} path(s) from $GITHUB_PATH into AWF_HOST_PATH`);
     }
   }
 

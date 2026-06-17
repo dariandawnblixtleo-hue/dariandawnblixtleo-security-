@@ -11,8 +11,6 @@ import {
 } from './host-identity';
 import {
   extractGhHostFromServerUrl,
-  readGitHubPathEntries,
-  mergeGitHubPathEntries,
   readGitHubEnvEntries,
   readEnvFile,
 } from './github-env';
@@ -376,111 +374,6 @@ describe('docker-manager utilities', () => {
     });
   });
 
-  describe('readGitHubPathEntries', () => {
-    let tmpDir: string;
-
-    beforeEach(() => {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-github-path-'));
-    });
-
-    afterEach(() => {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    });
-
-    it('should return empty array when GITHUB_PATH is not set', () => {
-      const originalGithubPath = process.env.GITHUB_PATH;
-      delete process.env.GITHUB_PATH;
-
-      try {
-        const result = readGitHubPathEntries();
-        expect(result).toEqual([]);
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        }
-      }
-    });
-
-    it('should return empty array when GITHUB_PATH file does not exist', () => {
-      const originalGithubPath = process.env.GITHUB_PATH;
-      process.env.GITHUB_PATH = '/nonexistent/path/to/github_path_file';
-
-      try {
-        const result = readGitHubPathEntries();
-        expect(result).toEqual([]);
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
-      }
-    });
-
-    it('should read path entries from GITHUB_PATH file', () => {
-      const pathFile = path.join(tmpDir, 'add_path');
-      fs.writeFileSync(pathFile, '/opt/hostedtoolcache/Ruby/3.3.10/x64/bin\n/opt/hostedtoolcache/Python/3.12.0/x64/bin\n');
-
-      const originalGithubPath = process.env.GITHUB_PATH;
-      process.env.GITHUB_PATH = pathFile;
-
-      try {
-        const result = readGitHubPathEntries();
-        expect(result).toEqual([
-          '/opt/hostedtoolcache/Ruby/3.3.10/x64/bin',
-          '/opt/hostedtoolcache/Python/3.12.0/x64/bin',
-        ]);
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
-      }
-    });
-
-    it('should handle empty lines and whitespace in GITHUB_PATH file', () => {
-      const pathFile = path.join(tmpDir, 'add_path');
-      fs.writeFileSync(pathFile, '  /opt/hostedtoolcache/Ruby/3.3.10/x64/bin  \n\n  \n/opt/dart-sdk/bin\n');
-
-      const originalGithubPath = process.env.GITHUB_PATH;
-      process.env.GITHUB_PATH = pathFile;
-
-      try {
-        const result = readGitHubPathEntries();
-        expect(result).toEqual([
-          '/opt/hostedtoolcache/Ruby/3.3.10/x64/bin',
-          '/opt/dart-sdk/bin',
-        ]);
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
-      }
-    });
-
-    it('should handle empty GITHUB_PATH file', () => {
-      const pathFile = path.join(tmpDir, 'add_path');
-      fs.writeFileSync(pathFile, '');
-
-      const originalGithubPath = process.env.GITHUB_PATH;
-      process.env.GITHUB_PATH = pathFile;
-
-      try {
-        const result = readGitHubPathEntries();
-        expect(result).toEqual([]);
-      } finally {
-        if (originalGithubPath !== undefined) {
-          process.env.GITHUB_PATH = originalGithubPath;
-        } else {
-          delete process.env.GITHUB_PATH;
-        }
-      }
-    });
-  });
-
   describe('parseGitHubEnvFile (via readGitHubEnvEntries)', () => {
     let tmpDir: string;
     let originalGithubEnv: string | undefined;
@@ -610,53 +503,6 @@ describe('docker-manager utilities', () => {
         if (original !== undefined) process.env.GITHUB_ENV = original;
         else delete process.env.GITHUB_ENV;
       }
-    });
-  });
-
-  describe('mergeGitHubPathEntries', () => {
-    it('should return current PATH when no github path entries', () => {
-      const result = mergeGitHubPathEntries('/usr/bin:/usr/local/bin', []);
-      expect(result).toBe('/usr/bin:/usr/local/bin');
-    });
-
-    it('should prepend github path entries to current PATH', () => {
-      const result = mergeGitHubPathEntries(
-        '/usr/bin:/usr/local/bin',
-        ['/opt/hostedtoolcache/Ruby/3.3.10/x64/bin']
-      );
-      expect(result).toBe('/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:/usr/bin:/usr/local/bin');
-    });
-
-    it('should not duplicate entries already in PATH', () => {
-      const result = mergeGitHubPathEntries(
-        '/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:/usr/bin:/usr/local/bin',
-        ['/opt/hostedtoolcache/Ruby/3.3.10/x64/bin']
-      );
-      expect(result).toBe('/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:/usr/bin:/usr/local/bin');
-    });
-
-    it('should handle multiple new entries', () => {
-      const result = mergeGitHubPathEntries(
-        '/usr/bin',
-        ['/opt/hostedtoolcache/Ruby/3.3.10/x64/bin', '/opt/dart-sdk/bin']
-      );
-      expect(result).toBe('/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:/opt/dart-sdk/bin:/usr/bin');
-    });
-
-    it('should handle mix of new and existing entries', () => {
-      const result = mergeGitHubPathEntries(
-        '/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:/usr/bin',
-        ['/opt/hostedtoolcache/Ruby/3.3.10/x64/bin', '/opt/dart-sdk/bin']
-      );
-      expect(result).toBe('/opt/dart-sdk/bin:/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:/usr/bin');
-    });
-
-    it('should handle empty current PATH', () => {
-      const result = mergeGitHubPathEntries(
-        '',
-        ['/opt/hostedtoolcache/Ruby/3.3.10/x64/bin']
-      );
-      expect(result).toBe('/opt/hostedtoolcache/Ruby/3.3.10/x64/bin');
     });
   });
 

@@ -3,9 +3,8 @@ import * as path from 'path';
 import * as os from 'os';
 import {
   extractGhHostFromServerUrl,
-  readGitHubPathEntries,
   readGitHubEnvEntries,
-  mergeGitHubPathEntries,
+  prependPathEntries,
   readEnvFile,
   TOOLCHAIN_ENV_VARS,
 } from './github-env';
@@ -47,90 +46,6 @@ describe('extractGhHostFromServerUrl', () => {
 
   it('should handle localhost URLs', () => {
     expect(extractGhHostFromServerUrl('http://localhost:3000')).toBe('localhost');
-  });
-});
-
-describe('readGitHubPathEntries', () => {
-  let testDir: string;
-  let originalGithubPath: string | undefined;
-
-  beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-github-path-test-'));
-    originalGithubPath = process.env.GITHUB_PATH;
-  });
-
-  afterEach(() => {
-    if (originalGithubPath !== undefined) {
-      process.env.GITHUB_PATH = originalGithubPath;
-    } else {
-      delete process.env.GITHUB_PATH;
-    }
-    if (fs.existsSync(testDir)) {
-      fs.rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should return empty array when GITHUB_PATH is not set', () => {
-    delete process.env.GITHUB_PATH;
-    expect(readGitHubPathEntries()).toEqual([]);
-  });
-
-  it('should return empty array when file does not exist', () => {
-    process.env.GITHUB_PATH = path.join(testDir, 'nonexistent');
-    expect(readGitHubPathEntries()).toEqual([]);
-  });
-
-  it('should read single path entry', () => {
-    const githubPathFile = path.join(testDir, 'github_path');
-    fs.writeFileSync(githubPathFile, '/usr/local/bin\n');
-    process.env.GITHUB_PATH = githubPathFile;
-    expect(readGitHubPathEntries()).toEqual(['/usr/local/bin']);
-  });
-
-  it('should read multiple path entries', () => {
-    const githubPathFile = path.join(testDir, 'github_path');
-    fs.writeFileSync(githubPathFile, '/usr/local/bin\n/opt/ruby/bin\n/home/runner/.cargo/bin\n');
-    process.env.GITHUB_PATH = githubPathFile;
-    expect(readGitHubPathEntries()).toEqual([
-      '/usr/local/bin',
-      '/opt/ruby/bin',
-      '/home/runner/.cargo/bin',
-    ]);
-  });
-
-  it('should ignore empty lines', () => {
-    const githubPathFile = path.join(testDir, 'github_path');
-    fs.writeFileSync(githubPathFile, '/usr/local/bin\n\n/opt/ruby/bin\n  \n/home/runner/.cargo/bin\n');
-    process.env.GITHUB_PATH = githubPathFile;
-    expect(readGitHubPathEntries()).toEqual([
-      '/usr/local/bin',
-      '/opt/ruby/bin',
-      '/home/runner/.cargo/bin',
-    ]);
-  });
-
-  it('should trim whitespace from entries', () => {
-    const githubPathFile = path.join(testDir, 'github_path');
-    fs.writeFileSync(githubPathFile, '  /usr/local/bin  \n\t/opt/ruby/bin\t\n');
-    process.env.GITHUB_PATH = githubPathFile;
-    expect(readGitHubPathEntries()).toEqual([
-      '/usr/local/bin',
-      '/opt/ruby/bin',
-    ]);
-  });
-
-  it('should handle empty file', () => {
-    const githubPathFile = path.join(testDir, 'github_path');
-    fs.writeFileSync(githubPathFile, '');
-    process.env.GITHUB_PATH = githubPathFile;
-    expect(readGitHubPathEntries()).toEqual([]);
-  });
-
-  it('should handle file with only whitespace', () => {
-    const githubPathFile = path.join(testDir, 'github_path');
-    fs.writeFileSync(githubPathFile, '  \n  \n  \n');
-    process.env.GITHUB_PATH = githubPathFile;
-    expect(readGitHubPathEntries()).toEqual([]);
   });
 });
 
@@ -345,51 +260,51 @@ describe('readGitHubEnvEntries', () => {
   });
 });
 
-describe('mergeGitHubPathEntries', () => {
-  it('should return current path when github path entries are empty', () => {
+describe('prependPathEntries', () => {
+  it('should return current path when path entries are empty', () => {
     const currentPath = '/usr/bin:/usr/local/bin';
-    expect(mergeGitHubPathEntries(currentPath, [])).toBe(currentPath);
+    expect(prependPathEntries(currentPath, [])).toBe(currentPath);
   });
 
   it('should prepend new entries', () => {
     const currentPath = '/usr/bin:/usr/local/bin';
-    const githubEntries = ['/opt/ruby/bin'];
-    expect(mergeGitHubPathEntries(currentPath, githubEntries)).toBe(
+    const entries = ['/opt/ruby/bin'];
+    expect(prependPathEntries(currentPath, entries)).toBe(
       '/opt/ruby/bin:/usr/bin:/usr/local/bin'
     );
   });
 
   it('should prepend multiple new entries in order', () => {
     const currentPath = '/usr/bin';
-    const githubEntries = ['/opt/ruby/bin', '/home/runner/.cargo/bin'];
-    expect(mergeGitHubPathEntries(currentPath, githubEntries)).toBe(
+    const entries = ['/opt/ruby/bin', '/home/runner/.cargo/bin'];
+    expect(prependPathEntries(currentPath, entries)).toBe(
       '/opt/ruby/bin:/home/runner/.cargo/bin:/usr/bin'
     );
   });
 
   it('should skip entries that already exist in current path', () => {
     const currentPath = '/usr/bin:/usr/local/bin:/opt/ruby/bin';
-    const githubEntries = ['/opt/ruby/bin', '/home/runner/.cargo/bin'];
-    expect(mergeGitHubPathEntries(currentPath, githubEntries)).toBe(
+    const entries = ['/opt/ruby/bin', '/home/runner/.cargo/bin'];
+    expect(prependPathEntries(currentPath, entries)).toBe(
       '/home/runner/.cargo/bin:/usr/bin:/usr/local/bin:/opt/ruby/bin'
     );
   });
 
   it('should handle empty current path', () => {
-    const githubEntries = ['/opt/ruby/bin'];
-    expect(mergeGitHubPathEntries('', githubEntries)).toBe('/opt/ruby/bin');
+    const entries = ['/opt/ruby/bin'];
+    expect(prependPathEntries('', entries)).toBe('/opt/ruby/bin');
   });
 
-  it('should return current path when all github entries already exist', () => {
+  it('should return current path when all entries already exist', () => {
     const currentPath = '/usr/bin:/usr/local/bin:/opt/ruby/bin';
-    const githubEntries = ['/opt/ruby/bin', '/usr/bin'];
-    expect(mergeGitHubPathEntries(currentPath, githubEntries)).toBe(currentPath);
+    const entries = ['/opt/ruby/bin', '/usr/bin'];
+    expect(prependPathEntries(currentPath, entries)).toBe(currentPath);
   });
 
   it('should handle multiple colons in path gracefully', () => {
     const currentPath = '/usr/bin::/usr/local/bin'; // Double colon creates empty entry
-    const githubEntries = ['/opt/ruby/bin'];
-    const result = mergeGitHubPathEntries(currentPath, githubEntries);
+    const entries = ['/opt/ruby/bin'];
+    const result = prependPathEntries(currentPath, entries);
     expect(result).toContain('/opt/ruby/bin');
     expect(result).toContain('/usr/bin');
     expect(result).toContain('/usr/local/bin');
