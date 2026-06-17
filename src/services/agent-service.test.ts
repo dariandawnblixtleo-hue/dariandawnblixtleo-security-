@@ -477,7 +477,8 @@ describe('agent service', () => {
 
       process.env.PATH = '/usr/local/bin:/usr/bin';
       // create a file instead of a directory
-      const tmpFile = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-file-')) + '.file';
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-file-'));
+      const tmpFile = path.join(tmpDir, 'not-a-dir.file');
       fs.writeFileSync(tmpFile, 'not a dir');
       process.env.RUNNER_TOOL_CACHE = tmpFile;
 
@@ -494,10 +495,33 @@ describe('agent service', () => {
         } else {
           delete process.env.RUNNER_TOOL_CACHE;
         }
-        // eslint-disable-next-line no-empty,@typescript-eslint/no-unused-vars
-        try { fs.rmSync(tmpFile, { force: true }); } catch (_e) {
-          // File may not exist, safe to ignore
-        }
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should avoid adding toolcache bins for tools already present on PATH', () => {
+      const toolCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-tool-cache-'));
+      const nodeBinDir = path.join(toolCacheDir, 'node', '24.16.0', 'x64', 'bin');
+      fs.mkdirSync(nodeBinDir, { recursive: true });
+      fs.writeFileSync(path.join(nodeBinDir, 'node'), '#!/bin/sh\necho node\n', { mode: 0o755 });
+
+      const originalPath = process.env.PATH;
+      const originalRunnerToolCache = process.env.RUNNER_TOOL_CACHE;
+      const pathDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-path-bin-'));
+      fs.writeFileSync(path.join(pathDir, 'node'), '#!/bin/sh\necho node\n', { mode: 0o755 });
+      process.env.PATH = `${pathDir}:/usr/bin:/bin`;
+      process.env.RUNNER_TOOL_CACHE = toolCacheDir;
+
+      try {
+        const result = generateDockerCompose(mockConfig, mockNetworkConfig);
+        const env = result.services.agent.environment as Record<string, string>;
+        expect(env.AWF_HOST_PATH).toBe(`${pathDir}:/usr/bin:/bin`);
+      } finally {
+        if (originalPath !== undefined) process.env.PATH = originalPath;
+        if (originalRunnerToolCache !== undefined) process.env.RUNNER_TOOL_CACHE = originalRunnerToolCache;
+        else delete process.env.RUNNER_TOOL_CACHE;
+        fs.rmSync(pathDir, { recursive: true, force: true });
+        fs.rmSync(toolCacheDir, { recursive: true, force: true });
       }
     });
 

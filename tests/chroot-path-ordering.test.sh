@@ -71,6 +71,10 @@ run_path_test() {
 
   # Run the script in a sub-shell with a clean environment
   (
+    local isolated_home
+    isolated_home="$(mktemp -d "${TMPDIR_TEST}/home-XXXXXX")"
+    trap '/bin/rm -rf "${isolated_home}"' EXIT
+    export HOME="${isolated_home}"
     export PATH="${base_path}"
     eval "${script}"
     eval "${check_expr}"

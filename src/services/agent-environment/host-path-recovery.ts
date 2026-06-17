@@ -7,9 +7,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../../logger';
 
+const MAX_RECOVERED_TOOLCACHE_BINS = 12;
+
+// Probe commands used to determine whether a tool is already available on PATH.
+const TOOL_PROBE_BINARIES: Record<string, string> = {
+  node: 'node',
+  python: 'python3',
+  ruby: 'ruby',
+  go: 'go',
+  uv: 'uv',
+  dotnet: 'dotnet',
+  java: 'java',
+  rust: 'rustc',
+};
+
 export function recoverHostPaths(environment: Record<string, string>): void {
   if (process.env.PATH) {
-    const runnerToolCacheBinDirs = discoverRunnerToolCacheBinDirs(process.env.RUNNER_TOOL_CACHE);
+    const runnerToolCacheBinDirs = discoverRunnerToolCacheBinDirs(
+      process.env.RUNNER_TOOL_CACHE,
+      process.env.PATH,
+    );
     environment.AWF_HOST_PATH = prependPathEntries(process.env.PATH, runnerToolCacheBinDirs);
     if (runnerToolCacheBinDirs.length > 0) {
       logger.debug(`Merged ${runnerToolCacheBinDirs.length} runner tool cache bin path(s) into AWF_HOST_PATH`);
@@ -31,7 +48,10 @@ export function recoverHostPaths(environment: Record<string, string>): void {
   }
 }
 
-function discoverRunnerToolCacheBinDirs(runnerToolCache: string | undefined): string[] {
+function discoverRunnerToolCacheBinDirs(
+  runnerToolCache: string | undefined,
+  currentPath: string,
+): string[] {
   if (!runnerToolCache) {
     return [];
   }
@@ -44,26 +64,46 @@ function discoverRunnerToolCacheBinDirs(runnerToolCache: string | undefined): st
     return [];
   }
 
-  const binDirs: string[] = [];
+  const binDirsByTool = new Map<string, string[]>();
   for (const toolName of safeReadDir(runnerToolCache)) {
     const toolDir = path.join(runnerToolCache, toolName);
     if (!isDirectory(toolDir)) continue;
 
-    for (const versionName of safeReadDir(toolDir)) {
+    for (const versionName of safeReadDir(toolDir).sort().reverse()) {
       const versionDir = path.join(toolDir, versionName);
       if (!isDirectory(versionDir)) continue;
 
-      for (const architectureName of safeReadDir(versionDir)) {
+      for (const architectureName of safeReadDir(versionDir).sort()) {
         const architectureDir = path.join(versionDir, architectureName);
         const binDir = path.join(architectureDir, 'bin');
         if (isDirectory(binDir)) {
-          binDirs.push(binDir);
+          const normalizedTool = toolName.toLowerCase();
+          const existing = binDirsByTool.get(normalizedTool) ?? [];
+          existing.push(binDir);
+          binDirsByTool.set(normalizedTool, existing);
         }
       }
     }
   }
 
-  return binDirs.sort();
+  const selectedBinDirs: string[] = [];
+  for (const [toolName, toolBinDirs] of [...binDirsByTool.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (selectedBinDirs.length >= MAX_RECOVERED_TOOLCACHE_BINS) {
+      break;
+    }
+
+    const probeBinary = TOOL_PROBE_BINARIES[toolName];
+    if (probeBinary && isExecutableOnPath(probeBinary, currentPath)) {
+      continue;
+    }
+
+    // Use the first discovered entry after reverse version sort (newest-first).
+    if (toolBinDirs[0]) {
+      selectedBinDirs.push(toolBinDirs[0]);
+    }
+  }
+
+  return selectedBinDirs;
 }
 
 function safeReadDir(directory: string): string[] {
@@ -80,4 +120,18 @@ function isDirectory(candidate: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isExecutableOnPath(binaryName: string, currentPath: string): boolean {
+  for (const pathEntry of currentPath.split(path.delimiter)) {
+    if (!pathEntry) continue;
+    const candidate = path.join(pathEntry, binaryName);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch {
+      // ignore missing/non-executable entries
+    }
+  }
+  return false;
 }

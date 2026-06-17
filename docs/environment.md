@@ -168,7 +168,7 @@ Tools installed by GitHub Actions `setup-*` actions (e.g., `astral-sh/setup-uv`,
 
 The chroot entrypoint exports `AWF_HOST_PATH` as `PATH` inside the chroot, so tools like `uv`, `node`, `python3`, `ruby`, etc. resolve correctly.
 
-This behavior was introduced in **awf v0.60.0** and is active automatically — no extra flags are required.
+This behavior is active automatically — no extra flags are required.
 
 **Important:** `$GITHUB_PATH` is a per-step command file. The Actions runner consumes each step's file after that step completes and folds those entries into `PATH` for later steps. AWF does not read `$GITHUB_PATH` for path recovery; for previous setup steps, AWF relies on the inherited `PATH` and `RUNNER_TOOL_CACHE` recovery.
 
