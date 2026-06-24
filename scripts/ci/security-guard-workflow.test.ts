@@ -11,7 +11,7 @@ describe('security guard workflow optimization config', () => {
     const source = fs.readFileSync(securityGuardSourcePath, 'utf-8');
 
     expect(source).toContain('model: claude-haiku-4-5');
-    expect(source).toContain('max-turns: 6');
+    expect(source).toContain('max-turns: 12');
     expect(source).toContain('## ⚡ Fast Path');
     expect(source).toContain('safeoutputs noop');
     expect(source).toContain('[DIFF TRUNCATED ...]');
@@ -39,7 +39,7 @@ describe('security guard workflow optimization config', () => {
     expect(lock).toContain('COPILOT_MODEL: claude-haiku-4-5');
     expect(lock).toContain('COPILOT_DUMMY_BYOK: dummy-byok-key-for-offline-mode');
     expect(lock).not.toContain(`COPILOT_DUMMY_BYOK: ${COPILOT_PLACEHOLDER_TOKEN}`);
-    expect(lock).toContain('GH_AW_MAX_TURNS: 6');
+    expect(lock).toContain('GH_AW_MAX_TURNS: 12');
     expect(lock).toContain('github/gh-aw-actions/setup@3c7f3b6f423dd721e2f115b7c8fda65287e1f137 # v0.81.0');
     expect(lock).not.toContain('github/gh-aw-actions/setup@v0.80.6');
     expect(lock).toContain('ghcr.io/github/github-mcp-server:v1.4.0');
