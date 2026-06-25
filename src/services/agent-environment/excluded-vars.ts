@@ -1,5 +1,6 @@
 import { PROXY_ENV_VARS } from '../../upstream-proxy';
 import { WrapperConfig } from '../../types';
+import { AWF_SOURCE_CREDENTIAL_VARS } from '../../constants/source-credentials';
 
 export function buildExclusionSet(config: WrapperConfig): Set<string> {
   const excludedEnvVars = new Set([
@@ -22,14 +23,11 @@ export function buildExclusionSet(config: WrapperConfig): Set<string> {
   ]);
 
   if (config.enableApiProxy) {
-    excludedEnvVars.add('OPENAI_API_KEY');
-    excludedEnvVars.add('OPENAI_KEY');
-    excludedEnvVars.add('CODEX_API_KEY');
-    excludedEnvVars.add('ANTHROPIC_API_KEY');
-    excludedEnvVars.add('CLAUDE_API_KEY');
-    excludedEnvVars.add('COPILOT_GITHUB_TOKEN');
-    excludedEnvVars.add('COPILOT_PROVIDER_API_KEY');
-    excludedEnvVars.add('GEMINI_API_KEY');
+    for (const v of AWF_SOURCE_CREDENTIAL_VARS) {
+      excludedEnvVars.add(v);
+    }
+    // Exclude Gemini base-URL routing variables as well — these reveal the
+    // upstream endpoint and must not reach the agent when the sidecar is active.
     excludedEnvVars.add('GOOGLE_GEMINI_BASE_URL');
     excludedEnvVars.add('GEMINI_API_BASE_URL');
   }

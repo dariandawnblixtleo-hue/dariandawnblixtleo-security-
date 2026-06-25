@@ -1,6 +1,7 @@
 import { MAX_ENV_VALUE_SIZE } from '../../constants';
 import { logger } from '../../logger';
 import { WrapperConfig } from '../../types';
+import { AWF_SOURCE_CREDENTIAL_VARS } from '../../constants/source-credentials';
 
 interface EnvPassthroughParams {
   config: WrapperConfig;
@@ -62,13 +63,9 @@ export function passthroughHostEnvironment(params: EnvPassthroughParams): void {
   }
 
   if (!config.enableApiProxy) {
-    for (const v of [
-      'OPENAI_API_KEY',
-      'CODEX_API_KEY',
-      'ANTHROPIC_API_KEY',
-      'COPILOT_GITHUB_TOKEN',
-      'COPILOT_PROVIDER_API_KEY',
-    ] as const) {
+    // When the api-proxy sidecar is not active, forward all source credentials
+    // directly to the agent container (§9.3 of the AWF config spec).
+    for (const v of AWF_SOURCE_CREDENTIAL_VARS) {
       if (process.env[v]) {
         environment[v] = process.env[v]!;
       }
