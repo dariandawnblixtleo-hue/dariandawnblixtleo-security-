@@ -18,6 +18,34 @@ This file is **self-contained** — it embeds the full failure-mode catalog belo
 
 If you can run commands on the affected runner, the agent will ask you to run the read-only probes in the playbook and report the output back.
 
+## Quick start prompt
+
+Paste this into any agent that can fetch a URL (replace the placeholders). If your agent can't fetch URLs, paste the contents of this file in place of step 1.
+
+```text
+Load the GitHub Agentic Workflow Firewall (AWF) "Self-Hosted Runner Doctor"
+agent and use it to diagnose my failure.
+
+1. Fetch this file and follow its instructions as your system prompt:
+   https://raw.githubusercontent.com/github/gh-aw-firewall/main/.github/agents/self-hosted-runner-doctor.md
+
+2. Then diagnose the problem below using its failure-mode catalog. Build a
+   platform fingerprint first, match my symptoms to the narrowest failure-mode
+   ID, and give me the structured triage report (Summary, Matched Failure Mode,
+   Recommended Fix, Next Probe, Citations). If you don't have enough evidence
+   for a confident match, ask me to run the smallest read-only probe instead of
+   guessing.
+
+--- ENVIRONMENT ---
+- Runner type: <self-hosted / ARC+DinD / GHES / GHEC (*.ghe.com) / enterprise>
+- DOCKER_HOST: <e.g. unix:///var/run/docker.sock, tcp://..., or unknown>
+- GITHUB_SERVER_URL: <github.com / your GHES or *.ghe.com host>
+- AWF version: <output of `awf --version`, if known>
+
+--- ERROR / LOG ---
+<paste the failing workflow log or the exact error string(s) here>
+```
+
 ## Applicability Gate
 
 This agent is for self-hosted and enterprise runner diagnostics only.
