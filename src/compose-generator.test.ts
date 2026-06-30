@@ -495,5 +495,31 @@ describe('generateDockerCompose', () => {
 
         expect(result.volumes).toEqual({ sysroot: {} });
       });
+
+      it('filters out workDir-based and home-based bind mounts on split-fs', () => {
+        const config = {
+          ...mockConfig,
+          runnerTopology: 'arc-dind' as const,
+          workDir: '/tmp/awf-12345',
+        };
+        const result = generateDockerCompose(config, mockNetworkConfig);
+        const volumes = result.services.agent.volumes as string[];
+
+        // workDir-based mounts should be dropped
+        expect(volumes.some(v => v.startsWith('/tmp/awf-12345'))).toBe(false);
+
+        // Home-based mounts targeting /host/home should be dropped
+        const homeTargets = volumes.filter(v => {
+          const target = v.split(':')[1];
+          return target.startsWith('/host/home') && !v.startsWith('/dev/null');
+        });
+        expect(homeTargets).toHaveLength(0);
+
+        // Should still have /tmp:/tmp, /sys, /dev, sysroot volume
+        expect(volumes).toContain('/tmp:/tmp:rw');
+        expect(volumes).toContain('/sys:/host/sys:ro');
+        expect(volumes).toContain('/dev:/host/dev:ro');
+        expect(volumes).toContain('sysroot:/host:rw');
+      });
     });
 });
