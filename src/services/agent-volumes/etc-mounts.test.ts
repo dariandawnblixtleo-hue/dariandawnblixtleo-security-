@@ -16,6 +16,28 @@ function createMinimalConfig(overrides: Partial<WrapperConfig> = {}): WrapperCon
 }
 
 describe('buildEtcMounts', () => {
+  describe('sysroot gating by runnerTopology', () => {
+    it('returns empty array when runnerTopology is arc-dind (sysroot provides /etc)', () => {
+      const config = createMinimalConfig({ runnerTopology: 'arc-dind' });
+      const mounts = buildEtcMounts(config);
+      expect(mounts).toEqual([]);
+    });
+
+    it('still mounts /etc files when runnerTopology is standard', () => {
+      const config = createMinimalConfig({ runnerTopology: 'standard' });
+      const mounts = buildEtcMounts(config);
+      expect(mounts.length).toBeGreaterThan(0);
+      expect(mounts).toContain('/etc/ld.so.cache:/host/etc/ld.so.cache:ro');
+    });
+
+    it('still mounts /etc files when runnerTopology is undefined', () => {
+      const config = createMinimalConfig({ runnerTopology: undefined });
+      const mounts = buildEtcMounts(config);
+      expect(mounts.length).toBeGreaterThan(0);
+      expect(mounts).toContain('/etc/ld.so.cache:/host/etc/ld.so.cache:ro');
+    });
+  });
+
   describe('non-DinD mode', () => {
     it('mounts /etc/passwd and /etc/group directly', () => {
       const config = createMinimalConfig({ dockerHostPathPrefix: undefined });

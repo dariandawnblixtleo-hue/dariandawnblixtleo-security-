@@ -3,6 +3,7 @@ import * as path from 'path';
 import { WrapperConfig } from '../../types';
 import { shouldUseDockerHostStaging, stageHostFile, getDockerHostStageRoot } from './docker-host-staging';
 import { getSafeHostUid, getSafeHostGid } from '../../host-identity';
+import { isSysrootEnabled } from '../sysroot-service';
 
 /**
  * Synthesize a minimal /etc/passwd or /etc/group file in the staging directory.
@@ -58,6 +59,13 @@ function resolveUniqueName(content: string, preferredName: string, id: string): 
 }
 
 export function buildEtcMounts(config: WrapperConfig): string[] {
+  // When sysroot-stage is active (arc-dind), the sysroot volume already provides
+  // a complete /etc from the build-tools image. Bind-mounting the host's /etc files
+  // on top would fail on split-fs (Docker daemon can't resolve runner paths).
+  if (isSysrootEnabled(config)) {
+    return [];
+  }
+
   const mounts: string[] = [
     '/etc/ssl:/host/etc/ssl:ro',
     '/etc/ca-certificates:/host/etc/ca-certificates:ro',
