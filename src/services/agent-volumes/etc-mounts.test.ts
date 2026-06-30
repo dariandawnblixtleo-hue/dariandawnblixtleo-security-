@@ -16,7 +16,7 @@ function createMinimalConfig(overrides: Partial<WrapperConfig> = {}): WrapperCon
 }
 
 describe('buildEtcMounts', () => {
-  describe('arc-dind with sysroot-stage', () => {
+  describe('sysroot gating by runnerTopology', () => {
     it('returns empty array when runnerTopology is arc-dind (sysroot provides /etc)', () => {
       const config = createMinimalConfig({ runnerTopology: 'arc-dind' });
       const mounts = buildEtcMounts(config);
