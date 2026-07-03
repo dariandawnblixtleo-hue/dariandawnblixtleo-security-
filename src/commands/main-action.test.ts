@@ -4,6 +4,8 @@
 const mockMkdirSync = jest.fn();
 const mockWriteFileSync = jest.fn();
 const mockChmodSync = jest.fn();
+const mockOpenSync = jest.fn().mockReturnValue(42);
+const mockCloseSync = jest.fn();
 
 jest.mock('fs', () => {
   const actual = jest.requireActual<typeof import('fs')>('fs');
@@ -12,10 +14,12 @@ jest.mock('fs', () => {
     mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
     writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
     chmodSync: (...args: unknown[]) => mockChmodSync(...args),
+    openSync: (...args: unknown[]) => mockOpenSync(...args),
+    closeSync: (...args: unknown[]) => mockCloseSync(...args),
   };
 });
 
-import { createMainAction } from './main-action';
+import { createMainAction, testHelpers } from './main-action';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 jest.mock('../logger', () => require('../test-helpers/mock-logger.test-utils').loggerMockFactory());
@@ -400,6 +404,9 @@ describe('createMainAction', () => {
       mockMkdirSync.mockReset();
       mockWriteFileSync.mockReset();
       mockChmodSync.mockReset();
+      mockOpenSync.mockReset();
+      mockOpenSync.mockReturnValue(42);
+      mockCloseSync.mockReset();
     });
 
     afterEach(() => jest.restoreAllMocks());
@@ -415,16 +422,15 @@ describe('createMainAction', () => {
       const action = createMainAction(getOptionValueSource);
       await action(['echo hi'], {});
 
-      expect(mockMkdirSync).toHaveBeenCalledWith('/tmp/awf-audit', { recursive: true, mode: 0o755 });
+      expect(mockMkdirSync).toHaveBeenCalledWith('/tmp/awf-audit', { recursive: true, mode: 0o700 });
+      expect(mockOpenSync).toHaveBeenCalledWith('/tmp/awf-audit/awf-resolved-config.json', 'wx', 0o600);
       expect(mockWriteFileSync).toHaveBeenCalledWith(
-        '/tmp/awf-audit/awf-resolved-config.json',
+        42,
         expect.stringContaining('"allowedDomains"'),
-        { mode: 0o644 },
       );
-      expect(mockChmodSync).toHaveBeenCalledWith('/tmp/awf-audit/awf-resolved-config.json', 0o644);
       // Verify secret key names are excluded from the artifact
       const written = mockWriteFileSync.mock.calls.find(
-        (c) => String(c[0]).includes('awf-resolved-config.json')
+        (c) => typeof c[0] === 'number'
       );
       expect(written).toBeDefined();
       const writtenJson = String(written![1]);
@@ -451,7 +457,7 @@ describe('createMainAction', () => {
       await action(['echo hi'], {});
 
       const written = mockWriteFileSync.mock.calls.find(
-        (c) => String(c[0]).includes('awf-resolved-config.json')
+        (c) => typeof c[0] === 'number'
       );
       expect(written).toBeDefined();
       const writtenJson = String(written![1]);
@@ -464,11 +470,68 @@ describe('createMainAction', () => {
       const action = createMainAction(getOptionValueSource);
       await action(['echo hi'], {});
 
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect(mockOpenSync).toHaveBeenCalledWith(
         '/tmp/awf-test/audit/awf-resolved-config.json',
-        expect.any(String),
-        { mode: 0o644 },
+        'wx',
+        0o600,
       );
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        42,
+        expect.any(String),
+      );
+    });
+  });
+
+  describe('extracted helper functions', () => {
+    it('redactConfigForLogging removes sensitive keys and redacts agentCommand', () => {
+      const secretValue = 'secret-123';
+      const configWithSecrets = {
+        ...STUB_CONFIG,
+        agentCommand: `agent --token ${secretValue}`,
+        openaiApiKey: 'sk-secret',
+      } as unknown as import('../types').WrapperConfig;
+      mockedRedactSecrets.redactSecrets.mockImplementation((s: string) =>
+        s.replace(secretValue, '[REDACTED]')
+      );
+
+      const redacted = testHelpers.redactConfigForLogging(configWithSecrets);
+
+      expect(redacted).not.toHaveProperty('openaiApiKey');
+      expect(redacted.agentCommand).toContain('[REDACTED]');
+      expect(redacted.agentCommand).not.toContain(secretValue);
+    });
+
+    it('persistConfigAuditArtifact logs debug when writing the artifact fails', () => {
+      mockMkdirSync.mockImplementationOnce(() => {
+        throw new Error('write failed');
+      });
+
+      testHelpers.persistConfigAuditArtifact(STUB_CONFIG, { foo: 'bar' });
+
+      expect(mockedLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to write resolved config artifact:')
+      );
+    });
+
+    it('buildCleanupFn runs cleanup using provided state getters', async () => {
+      const performCleanup = testHelpers.buildCleanupFn(
+        STUB_CONFIG,
+        () => true,
+        () => true,
+      );
+
+      await performCleanup();
+
+      expect(mockedDockerManager.preserveIptablesAudit).toHaveBeenCalledWith(
+        STUB_CONFIG.workDir,
+        STUB_CONFIG.auditDir
+      );
+      expect(mockedDockerManager.stopContainers).toHaveBeenCalledWith(
+        STUB_CONFIG.workDir,
+        STUB_CONFIG.keepContainers
+      );
+      expect(mockedHostIptables.cleanupHostIptables).toHaveBeenCalled();
+      expect(mockedDockerManager.cleanup).toHaveBeenCalled();
     });
   });
 });
