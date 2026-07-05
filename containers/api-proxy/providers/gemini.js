@@ -14,49 +14,27 @@
  */
 
 const { stripGeminiKeyParam } = require('../proxy-utils');
-const { createProviderAuthScaffold, createAdapterMethods, buildProviderAdapter } = require('../adapter-factory');
 const { GEMINI_ENV } = require('../provider-env-constants');
-const { providerKeyHeaders } = require('./auth-headers');
+const { createGoogleApiKeyAdapter } = require('./google-adapter');
 
 /**
  * Create the Google Gemini provider adapter.
  *
  * @param {Record<string, string|undefined>} env - Environment variables
- * @param {{ bodyTransform: ((body: Buffer) => Buffer|null)|null }} deps - Injected dependencies
+ * @param {{ bodyTransform?: ((body: Buffer) => (Buffer | null | Promise<Buffer | null>))|null }} [deps={}] - Injected dependencies
  * @returns {import('./index').ProviderAdapter}
  */
 function createGeminiAdapter(env, deps = {}) {
-  const { apiKey, rawTarget, basePath, bodyTransform } = createProviderAuthScaffold(env, deps, {
-    keyEnvVar: GEMINI_ENV.KEY,
-    targetEnvVar: GEMINI_ENV.TARGET,
-    basePathEnvVar: GEMINI_ENV.BASE_PATH,
-    defaultTarget: 'generativelanguage.googleapis.com',
-  });
-  const buildAuthHeaders = () => providerKeyHeaders('x-goog-api-key', apiKey);
-
-  const adapterMethods = createAdapterMethods({
-    apiKey,
-    rawTarget,
-    basePath,
-    provider: 'gemini',
-    port: 10003,
-    defaultTarget: 'generativelanguage.googleapis.com',
-    validationPath: '/v1beta/models',
-    validationHeaders: buildAuthHeaders,
-    modelsPath: '/v1beta/models',
-    modelsFetchHeaders: buildAuthHeaders,
-  });
-
-  return buildProviderAdapter({
+  return createGoogleApiKeyAdapter(env, deps, {
     name: 'gemini',
     port: 10003,
-    isManagementPort: false,
-    adapterMethods,
-    getAuthHeaders() {
-      return buildAuthHeaders();
-    },
-    bodyTransform,
-    isEnabled() { return !!apiKey; },
+    envConstants: GEMINI_ENV,
+    defaultTarget: 'generativelanguage.googleapis.com',
+    validationPath: '/v1beta/models',
+    modelsPath: '/v1beta/models',
+    healthServiceName: 'awf-api-proxy-gemini',
+    unconfiguredErrorMessage: 'Gemini proxy not configured (no GEMINI_API_KEY). Set GEMINI_API_KEY in the AWF runner environment to enable credential isolation.',
+    healthErrorMessage: 'GEMINI_API_KEY not configured in api-proxy sidecar',
     /**
      * Strip Gemini SDK auth query parameters before forwarding.
      * The SDK injects ?key= (or ?apiKey=, ?api_key=) alongside the header;
@@ -68,15 +46,6 @@ function createGeminiAdapter(env, deps = {}) {
     transformRequestUrl(url) {
       return stripGeminiKeyParam(url);
     },
-    /** Response returned for all requests when no GEMINI_API_KEY is configured. */
-    getUnconfiguredResponse() {
-      return {
-        statusCode: 503,
-        body: { error: 'Gemini proxy not configured (no GEMINI_API_KEY). Set GEMINI_API_KEY in the AWF runner environment to enable credential isolation.' },
-      };
-    },
-    healthServiceName: 'awf-api-proxy-gemini',
-    missingCredentialMessage: 'GEMINI_API_KEY not configured in api-proxy sidecar',
   });
 }
 
