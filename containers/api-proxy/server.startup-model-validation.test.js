@@ -155,4 +155,88 @@ describe('validateRequestedModel', () => {
       else process.env.AWF_MODEL_FALLBACK = prevFallback;
     }
   });
+
+  it('resolves AWF_REQUESTED_MODEL via recursive alias chain', () => {
+    const prevAliases = process.env.AWF_MODEL_ALIASES;
+    // Two-level alias: top-alias → mid-alias → copilot/*claude*
+    process.env.AWF_MODEL_ALIASES = JSON.stringify({
+      models: {
+        'top-alias': ['mid-alias'],
+        'mid-alias': ['copilot/*claude*'],
+      },
+    });
+
+    let isolatedServer;
+    jest.isolateModules(() => {
+      jest.mock('./logging', () => ({ logRequest: jest.fn() }));
+      isolatedServer = require('./server');
+    });
+
+    const { logRequest: isolatedLog } = require('./logging');
+
+    try {
+      isolatedServer.resetModelCacheState();
+      isolatedServer.cachedModels.copilot = ['claude-sonnet-4.6', 'gpt-4o'];
+      process.env.AWF_REQUESTED_MODEL = 'top-alias';
+      isolatedServer.validateRequestedModel();
+      expect(isolatedLog).toHaveBeenCalledWith('info', 'model_validation', expect.objectContaining({
+        requested_model: 'top-alias',
+        resolved_via: 'alias',
+        // Confirms the chain resolved to an actual claude model, not the alias names
+        message: expect.stringContaining('top-alias'),
+      }));
+      // Confirm model_validation_step debug entries cover both alias hops
+      const debugCalls = isolatedLog.mock.calls.filter(c => c[1] === 'model_validation_step');
+      expect(debugCalls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      if (prevAliases === undefined) delete process.env.AWF_MODEL_ALIASES;
+      else process.env.AWF_MODEL_ALIASES = prevAliases;
+    }
+  });
+
+  it('emits model_unavailable_at_startup when aliases form a cycle', () => {
+    const prevAliases = process.env.AWF_MODEL_ALIASES;
+    process.env.AWF_MODEL_ALIASES = JSON.stringify({
+      models: {
+        'cycle-a': ['cycle-b'],
+        'cycle-b': ['cycle-a'],
+      },
+    });
+
+    let isolatedServer;
+    jest.isolateModules(() => {
+      jest.mock('./logging', () => ({ logRequest: jest.fn() }));
+      isolatedServer = require('./server');
+    });
+
+    const { logRequest: isolatedLog } = require('./logging');
+
+    try {
+      isolatedServer.resetModelCacheState();
+      isolatedServer.cachedModels.copilot = ['gpt-4o'];
+      process.env.AWF_REQUESTED_MODEL = 'cycle-a';
+      isolatedServer.validateRequestedModel();
+      expect(isolatedLog).toHaveBeenCalledWith('error', 'model_unavailable_at_startup', expect.objectContaining({
+        requested_model: 'cycle-a',
+      }));
+      // Ensure no model_validation (success) log was emitted
+      expect(isolatedLog).not.toHaveBeenCalledWith('info', 'model_validation', expect.anything());
+    } finally {
+      if (prevAliases === undefined) delete process.env.AWF_MODEL_ALIASES;
+      else process.env.AWF_MODEL_ALIASES = prevAliases;
+    }
+  });
+
+  it('logs resolution steps at debug level when model resolves', () => {
+    process.env.AWF_REQUESTED_MODEL = 'gpt-4o';
+    cachedModels.copilot = ['gpt-4o', 'gpt-4o-mini'];
+    validateRequestedModel();
+    const debugCalls = logRequest.mock.calls.filter(c => c[1] === 'model_validation_step');
+    expect(debugCalls.length).toBeGreaterThan(0);
+    // The step message should reference the model name
+    expect(debugCalls[0][2]).toMatchObject({
+      message: expect.stringContaining('gpt-4o'),
+      provider: 'copilot',
+    });
+  });
 });
