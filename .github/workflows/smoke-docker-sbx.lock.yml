@@ -611,19 +611,19 @@ jobs:
             echo "❌ ERROR: DOCKER_USERNAME or DOCKER_PAT is empty!"
             exit 1
           fi
-          # Test Docker Hub login first (validates credentials)
-          echo "$DOCKER_PAT_VAL" | docker login --username "$DOCKER_USERNAME_VAL" --password-stdin
+          # Test Docker Hub registry login (validates creds for image pulls)
+          printf '%s' "$DOCKER_PAT_VAL" | docker login --username "$DOCKER_USERNAME_VAL" --password-stdin
           echo "✅ Docker Hub login succeeded"
-          # Now authenticate sbx service
-          echo "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
+          # Authenticate sbx service (printf avoids trailing newline from echo)
+          printf '%s' "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
           # Initialize global network policy — AWF Squid handles domain filtering,
           # so sbx policy is allow-all (Squid is the enforcement layer)
           sbx policy init allow-all
           # Verify auth works (sbx ls requires auth)
           sbx ls
-          # Dump create help for reference (remove after debugging)
-          echo "=== sbx create --help ==="
-          sbx create --help 2>&1 || true
+          # Full system diagnostics for debugging
+          echo "=== sbx diagnose ==="
+          sbx diagnose 2>&1 || true
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
