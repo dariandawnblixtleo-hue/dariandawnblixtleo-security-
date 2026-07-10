@@ -75,14 +75,14 @@ for (const workflowPath of codexWorkflowPaths) {
   }
 }
 
-// ── gVisor workflow: inject --container-runtime gvisor into the AWF command ───
+// ── Runtime workflow patching: inject --container-runtime into AWF commands ───
+// The compiler doesn't support sandbox.agent.containerRuntime yet, so we inject it here.
+const runtimeCmdPattern = /awf --config /g;
+
 const gvisorLockPath = path.join(workflowsDir, 'smoke-gvisor.lock.yml');
 try {
-  let gvisorContent = fs.readFileSync(gvisorLockPath, 'utf-8');
-  // Insert --container-runtime gvisor before --config on the awf command line.
-  // The compiler doesn't support sandbox.agent.containerRuntime yet, so we inject it here.
-  const awfCmdPattern = /awf --config /g;
-  const replacedContent = gvisorContent.replace(awfCmdPattern, 'awf --container-runtime gvisor --config ');
+  const gvisorContent = fs.readFileSync(gvisorLockPath, 'utf-8');
+  const replacedContent = gvisorContent.replace(runtimeCmdPattern, 'awf --container-runtime gvisor --config ');
   if (replacedContent !== gvisorContent) {
     fs.writeFileSync(gvisorLockPath, replacedContent);
     console.log(`  Injected --container-runtime gvisor into AWF command`);
@@ -92,4 +92,20 @@ try {
   }
 } catch {
   console.log(`Skipping ${gvisorLockPath}: file not found.`);
+}
+
+const sbxLockPath = path.join(workflowsDir, 'smoke-docker-sbx.lock.yml');
+try {
+  const sbxContent = fs.readFileSync(sbxLockPath, 'utf-8');
+  runtimeCmdPattern.lastIndex = 0;
+  const sbxReplacedContent = sbxContent.replace(runtimeCmdPattern, 'awf --container-runtime sbx --config ');
+  if (sbxReplacedContent !== sbxContent) {
+    fs.writeFileSync(sbxLockPath, sbxReplacedContent);
+    console.log(`  Injected --container-runtime sbx into AWF command`);
+    console.log(`Updated ${sbxLockPath}`);
+  } else {
+    console.log(`Skipping ${sbxLockPath}: no AWF command found to patch.`);
+  }
+} catch {
+  console.log(`Skipping ${sbxLockPath}: file not found.`);
 }

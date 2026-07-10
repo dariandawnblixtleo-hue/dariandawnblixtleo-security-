@@ -26,6 +26,8 @@ import { validateOptions } from './validate-options';
 import { probeSplitFilesystem } from '../dind-probe';
 import { assertTopologySupported, connectTopologyContainers } from '../topology';
 import { runDindBootstrap } from '../dind-bootstrap';
+import { runtimeUsesComposeAgent } from '../container-runtime';
+import { createSandbox, execInSandbox, removeSandbox, isSbxAvailable, SBX_DEFAULT_NAME } from '../sbx-manager';
 import type { WrapperConfig } from '../types';
 
 const SENSITIVE_CONFIG_KEYS = new Set([
@@ -87,6 +89,15 @@ function buildCleanupFn(
   return async (signal?: string) => {
     if (signal) {
       logger.info(`Received ${signal}, cleaning up...`);
+    }
+
+    // Clean up sbx sandbox if using microVM runtime
+    if (!runtimeUsesComposeAgent(config.containerRuntime) && !config.keepContainers) {
+      try {
+        await removeSandbox(SBX_DEFAULT_NAME);
+      } catch {
+        // Sandbox may not exist yet — that's fine
+      }
     }
 
     // Copy iptables audit BEFORE stopping containers (volumes are destroyed by `docker compose down -v`)
@@ -231,14 +242,46 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
   });
 
   try {
+    // For sbx (microVM) runtime, wrap startContainers and runAgentCommand
+    // to launch the agent in a sandbox instead of Docker Compose.
+    const useSbx = !runtimeUsesComposeAgent(config.containerRuntime);
+    let sbxName: string | undefined;
+
+    const sbxStartContainers = useSbx
+      ? async (workDir: string, allowedDomains: string[], proxyLogsDir?: string, skipPull?: boolean, onNetworkReady?: () => Promise<void>) => {
+          // Start infra-only compose (squid, api-proxy — no agent service)
+          await startContainers(workDir, allowedDomains, proxyLogsDir, skipPull, onNetworkReady);
+
+          // Verify sbx is available
+          if (!await isSbxAvailable()) {
+            throw new Error('Docker sbx CLI not found. Install sbx to use --container-runtime sbx.');
+          }
+
+          // Create the sandbox with workspace mounted, proxy chaining through Squid
+          const workspaceDir = process.env.GITHUB_WORKSPACE || process.cwd();
+          sbxName = await createSandbox({
+            workspaceDir,
+            squidIp: '172.30.0.10',
+          });
+        }
+      : startContainers;
+
+    const sbxRunAgentCommand = useSbx
+      ? async (_workDir: string, _allowedDomains: string[], _proxyLogsDir?: string, agentTimeoutMinutes?: number) => {
+          if (!sbxName) throw new Error('Sandbox not created');
+          const result = await execInSandbox(sbxName, config.agentCommand, agentTimeoutMinutes);
+          return { exitCode: result.exitCode, blockedDomains: [] as string[] };
+        }
+      : runAgentCommand;
+
     exitCode = await runMainWorkflow(
       config,
       {
         ensureFirewallNetwork,
         setupHostIptables,
         writeConfigs,
-        startContainers,
-        runAgentCommand,
+        startContainers: sbxStartContainers,
+        runAgentCommand: sbxRunAgentCommand,
         collectDiagnosticLogs,
         assertTopologySupported,
         connectTopologyContainers,

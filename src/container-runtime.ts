@@ -88,11 +88,11 @@ const RUNTIME_REGISTRY: Readonly<Record<string, RuntimeCapabilities>> = {
     needsStaticDns: true,
   },
   // Future: Docker sbx microVM backend
-  // sbx: {
-  //   executionModel: 'microvm',
-  //   dockerRuntime: undefined,
-  //   needsStaticDns: false,   // sbx manages its own DNS
-  // },
+  sbx: {
+    executionModel: 'microvm',
+    dockerRuntime: undefined,
+    needsStaticDns: false,   // sbx manages its own DNS
+  },
 };
 
 // ─── Public API ──────────────────────────────────────────────────────────────

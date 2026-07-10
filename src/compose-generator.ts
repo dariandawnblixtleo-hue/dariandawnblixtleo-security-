@@ -10,6 +10,7 @@ import { buildSquidService } from './services/squid-service';
 import { buildAgentEnvironment, buildAgentVolumes, buildAgentService } from './services/agent-service';
 import { assembleOptionalServices } from './services/optional-services';
 import { buildComposeNetworks } from './compose-network';
+import { runtimeUsesComposeAgent } from './container-runtime';
 
 /**
  * Generates Docker Compose configuration
@@ -104,10 +105,15 @@ export function generateDockerCompose(
   });
 
   // ── Assemble base services ─────────────────────────────────────────────────
+  // For microVM backends (e.g. sbx), the agent is NOT a compose service —
+  // it's launched externally.  We still build the agent service object so that
+  // optional-services can wire depends_on edges for infra containers, but we
+  // omit it from the final compose output.
+  const includeAgent = runtimeUsesComposeAgent(config.containerRuntime);
 
   const services: Record<string, any> = {
     'squid-proxy': squidService,
-    'agent': agentService,
+    ...(includeAgent ? { 'agent': agentService } : {}),
   };
 
   // ── Insert optional sidecars and wire depends_on edges ────────────────────

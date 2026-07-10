@@ -171,9 +171,10 @@ program
   )
   .option(
     '--container-runtime <runtime>',
-    'Container runtime for the agent container (e.g. "gvisor" for gVisor sandboxing).\n' +
-    '                                       AWF translates friendly names to Docker runtime identifiers\n' +
-    '                                       (gvisor → runsc). Unknown values are passed through as-is.'
+   'Container runtime for the agent container.\n' +
+   '                                       "gvisor" — OCI runtime via Docker Compose (translates to runsc).\n' +
+   '                                       "sbx" — Docker sbx microVM with hypervisor isolation.\n' +
+   '                                       Unknown values are passed through as raw Docker runtime names.'
   )
 
   // -- Container Configuration --
