@@ -114,15 +114,25 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   // sbx create is a host-side management operation that needs Docker auth
   // credentials (stored on disk by `sbx login`).  Only sbx exec (which runs
   // inside the sandbox) gets the sanitized env.
-  await execa('sbx', args, {
+  const createResult = await execa('sbx', args, {
     env: {
       ...process.env,
       DOCKER_SANDBOXES_PROXY: proxyUrl,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+    timeout: 120_000, // 2 minute timeout for sandbox creation
   });
 
-  logger.info(`Sandbox "${name}" created`);
+  if ((createResult.exitCode ?? 1) !== 0) {
+    const stderr = (createResult.stderr || '').trim();
+    const stdout = (createResult.stdout || '').trim();
+    throw new Error(
+      `sbx create failed (exit ${createResult.exitCode}): ${stderr || stdout || 'unknown error'}`
+    );
+  }
+
+  logger.info(`[sbx] Sandbox "${name}" created. stdout=${(createResult.stdout || '').substring(0, 200)}`);
   return name;
 }
 
@@ -228,24 +238,35 @@ export async function isSbxAvailable(): Promise<boolean> {
 }
 
 async function restartSbxDaemonWithProxy(proxyUrl: string): Promise<void> {
+  const DAEMON_TIMEOUT = 30_000; // 30s timeout for daemon operations
+
+  logger.info('[sbx-daemon] Checking current daemon status...');
   const daemonStatus = await execa('sbx', ['daemon', 'status', '--json'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
+    timeout: DAEMON_TIMEOUT,
   });
+  logger.info(`[sbx-daemon] Status check: exit=${daemonStatus.exitCode}, stdout=${(daemonStatus.stdout || '').substring(0, 200)}`);
 
   const daemonRunning = daemonStatus.exitCode === 0;
   if (daemonRunning) {
+    logger.info('[sbx-daemon] Daemon is running, stopping...');
     const stop = await execa('sbx', ['daemon', 'stop'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       reject: false,
+      timeout: DAEMON_TIMEOUT,
     });
+    logger.info(`[sbx-daemon] Stop: exit=${stop.exitCode}, stderr=${(stop.stderr || '').substring(0, 200)}`);
     if ((stop.exitCode ?? 1) !== 0) {
       throw new Error(
         `Unable to stop running sbx daemon (exit ${(stop.exitCode ?? 1)}): ${stop.stderr || stop.stdout || 'unknown error'}`
       );
     }
+  } else {
+    logger.info('[sbx-daemon] No daemon running, skipping stop.');
   }
 
+  logger.info(`[sbx-daemon] Starting daemon with DOCKER_SANDBOXES_PROXY=${proxyUrl}`);
   const start = await execa('sbx', ['daemon', 'start'], {
     env: {
       ...process.env,
@@ -253,17 +274,22 @@ async function restartSbxDaemonWithProxy(proxyUrl: string): Promise<void> {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
+    timeout: DAEMON_TIMEOUT,
   });
+  logger.info(`[sbx-daemon] Start: exit=${start.exitCode}, stdout=${(start.stdout || '').substring(0, 200)}, stderr=${(start.stderr || '').substring(0, 200)}`);
   if ((start.exitCode ?? 1) !== 0) {
     throw new Error(
       `Unable to start sbx daemon with DOCKER_SANDBOXES_PROXY (exit ${(start.exitCode ?? 1)}): ${start.stderr || start.stdout || 'unknown error'}`
     );
   }
 
+  logger.info('[sbx-daemon] Verifying daemon status...');
   const verify = await execa('sbx', ['daemon', 'status', '--json'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
+    timeout: DAEMON_TIMEOUT,
   });
+  logger.info(`[sbx-daemon] Verify: exit=${verify.exitCode}, stdout=${(verify.stdout || '').substring(0, 200)}`);
   if ((verify.exitCode ?? 1) !== 0) {
     throw new Error(
       `Unable to verify sbx daemon status after proxy configuration (exit ${(verify.exitCode ?? 1)}): ${verify.stderr || verify.stdout || 'unknown error'}`
@@ -278,4 +304,5 @@ async function restartSbxDaemonWithProxy(proxyUrl: string): Promise<void> {
       `sbx daemon status does not reflect expected DOCKER_SANDBOXES_PROXY (${proxyUrl})`
     );
   }
+  logger.info('[sbx-daemon] Daemon configured successfully.');
 }
