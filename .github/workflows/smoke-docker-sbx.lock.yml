@@ -616,21 +616,28 @@ jobs:
           echo "✅ Docker Hub login succeeded"
           # Authenticate sbx service (printf avoids trailing newline from echo)
           printf '%s' "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
-          # Initialize global network policy — AWF Squid handles domain filtering,
-          # so sbx policy is allow-all (Squid is the enforcement layer)
+          # Initialize policies — AWF Squid handles domain filtering,
+          # so sbx network policy is allow-all. Also need FS mount policies
+          # since sbx separates network and filesystem governance.
           sbx policy init allow-all
+          # Allow filesystem mounts globally (AWF controls egress, not FS)
+          echo "=== sbx policy allow --help ==="
+          sbx policy allow --help 2>&1 || true
+          echo "=== adding fs mount policies ==="
+          sbx policy allow --global 'fs:mount:read' 'fs:path:/' 2>&1 || echo "fs:mount:read policy failed, trying alternate syntax..."
+          sbx policy allow --global 'fs:mount:write' 'fs:path:/' 2>&1 || echo "fs:mount:write policy failed"
+          # List policies to see what's configured
+          echo "=== sbx policy ls ==="
+          sbx policy ls 2>&1 || true
           # Verify auth works (sbx ls requires auth)
           sbx ls
-          # Full system diagnostics for debugging
-          echo "=== sbx diagnose ==="
-          sbx diagnose 2>&1 || true
-          # Test sbx create directly (outside AWF) to isolate auth vs env issue
+          # Pre-pull template image so AWF's sbx create doesn't need registry auth
+          echo "=== pre-pulling shell template ==="
+          docker pull docker/sandbox-templates:shell-docker
+          # Test sbx create directly (outside AWF) to verify policies
           echo "=== test sbx create (pre-agent) ==="
-          echo "=== sbx policy --help ==="
-          sbx policy --help 2>&1 || true
-          echo "=== attempting create with workspace dir ==="
-          yes | sbx --debug create --name test-pre-agent shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx create test FAILED (exit $?)"
-          # Cleanup test sandbox if it was created
+          yes | sbx create --name test-pre-agent shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx create test FAILED (exit $?)"
+          # Cleanup test sandbox
           sbx stop test-pre-agent 2>/dev/null || true
           sbx rm --force test-pre-agent 2>/dev/null || true
       - name: Determine automatic lockdown mode for GitHub MCP Server
