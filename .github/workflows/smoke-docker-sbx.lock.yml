@@ -618,25 +618,33 @@ jobs:
           printf '%s' "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
           # Initialize policies — AWF Squid handles domain filtering
           sbx policy init allow-all
-          # Debug: understand what policy commands exist for FS mounts
-          echo "=== sbx policy profile --help ==="
-          sbx policy profile --help 2>&1 || true
-          echo "=== sbx policy init --help ==="
-          sbx policy init --help 2>&1 || true
-          echo "=== sbx policy inspect ==="
-          sbx policy inspect 2>&1 || true
-          echo "=== sbx policy ls --verbose ==="
-          sbx policy ls -D 2>&1 || true
+          # Debug: inspect the policy details and list profiles
+          echo "=== sbx policy inspect local-policy ==="
+          sbx policy inspect local-policy 2>&1 || true
+          echo "=== sbx policy profile ls ==="
+          sbx policy profile ls 2>&1 || true
+          echo "=== sbx policy reset --help ==="
+          sbx policy reset --help 2>&1 || true
+          # Try resetting and re-initializing to see if mount perms change
+          echo "=== trying policy reset + re-init ==="
+          sbx policy reset --force 2>&1 || sbx policy reset 2>&1 || true
+          sbx policy init allow-all 2>&1 || true
+          echo "=== sbx policy inspect local-policy (after reset) ==="
+          sbx policy inspect local-policy 2>&1 || true
           # Pre-pull template image
           docker pull docker/sandbox-templates:shell-docker
           # Verify auth
           sbx ls
-          # Test sbx create with --debug for mount policy details
-          echo "=== test sbx create (pre-agent) ==="
-          yes | sbx --debug create --name test-pre-agent shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx create test FAILED (exit $?)"
-          # Cleanup
-          sbx stop test-pre-agent 2>/dev/null || true
-          sbx rm --force test-pre-agent 2>/dev/null || true
+          # Try create with --clone (uses in-container clone, might bypass mount policy)
+          echo "=== test sbx create with --clone ==="
+          yes | sbx --debug create --name test-clone --clone shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx create --clone FAILED (exit $?)"
+          sbx stop test-clone 2>/dev/null || true
+          sbx rm --force test-clone 2>/dev/null || true
+          # Try create without workspace (bare sandbox)
+          echo "=== test sbx create bare ==="
+          yes | sbx create --name test-bare shell 2>&1 || echo "sbx create bare FAILED (exit $?)"
+          sbx stop test-bare 2>/dev/null || true
+          sbx rm --force test-bare 2>/dev/null || true
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
