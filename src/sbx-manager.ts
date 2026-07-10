@@ -124,10 +124,20 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
     config.workspaceDir,
   ];
 
-  // Add extra mounts passed from AWF config (preserve caller-provided mode)
+  // Add extra mounts passed from AWF config.
+  // AWF uses Docker-style "host:container:mode" format but sbx uses positional
+  // paths with optional :ro suffix (host path = container path in microVM).
   if (config.extraMounts) {
     for (const mount of config.extraMounts) {
-      args.push(mount);
+      const parts = mount.split(':');
+      const hostPath = parts[0];
+      // Determine mode: last segment is 'ro' or 'rw' if there are 2+ colons
+      const mode = parts.length >= 3 ? parts[parts.length - 1] : (parts.length === 2 && (parts[1] === 'ro' || parts[1] === 'rw') ? parts[1] : undefined);
+      if (mode === 'ro') {
+        args.push(`${hostPath}:ro`);
+      } else {
+        args.push(hostPath);
+      }
     }
   }
 
