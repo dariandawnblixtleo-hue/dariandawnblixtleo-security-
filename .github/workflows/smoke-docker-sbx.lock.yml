@@ -624,6 +624,12 @@ jobs:
           # Full system diagnostics for debugging
           echo "=== sbx diagnose ==="
           sbx diagnose 2>&1 || true
+          # Test sbx create directly (outside AWF) to isolate auth vs env issue
+          echo "=== test sbx create (pre-agent) ==="
+          yes | sbx --debug create --name test-pre-agent shell /tmp 2>&1 || echo "sbx create test FAILED (exit $?)"
+          # Cleanup test sandbox if it was created
+          sbx stop test-pre-agent 2>/dev/null || true
+          sbx rm --force test-pre-agent 2>/dev/null || true
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)

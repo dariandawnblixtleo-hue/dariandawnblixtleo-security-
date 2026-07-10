@@ -138,10 +138,16 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   // the sbx CLI itself, routing its Docker Hub auth through Squid and breaking
   // credential lookup.  The proxy is configured inside the sandbox via sbx exec --env.
   // Use 'yes |' to auto-confirm interactive prompts (sbx checks isatty).
-  const shellCmd = `yes | sbx ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
+  // Pass --debug for detailed diagnostics during iteration.
+  const debugArgs = ['--debug', ...args];
+  const shellCmd = `yes | sbx ${debugArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
   logger.info(`[sbx] Running: ${shellCmd}`);
   const createResult = await execa('bash', ['-c', shellCmd], {
-    env: process.env,
+    env: {
+      ...process.env,
+      // Ensure sbx/Docker can find Docker Hub credentials
+      DOCKER_CONFIG: process.env.DOCKER_CONFIG || `${process.env.HOME}/.docker`,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
     timeout: 120_000, // 2 minute timeout for sandbox creation
@@ -150,6 +156,9 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   if ((createResult.exitCode ?? 1) !== 0) {
     const stderr = (createResult.stderr || '').trim();
     const stdout = (createResult.stdout || '').trim();
+    // Log full debug output for diagnostics
+    if (stdout) logger.info(`[sbx] create stdout: ${stdout.substring(0, 2000)}`);
+    if (stderr) logger.info(`[sbx] create stderr: ${stderr.substring(0, 2000)}`);
     throw new Error(
       `sbx create failed (exit ${createResult.exitCode}): ${stderr || stdout || 'unknown error'}`
     );
