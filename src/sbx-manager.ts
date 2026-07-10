@@ -134,12 +134,15 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   // sbx create is a host-side management operation that needs Docker auth
   // credentials (stored on disk by `sbx login`).  Only sbx exec (which runs
   // inside the sandbox) gets the sanitized env.
+  // stdin sends 'y\n' to auto-confirm any interactive prompts.
   const createResult = await execa('sbx', args, {
     env: {
       ...process.env,
       DOCKER_SANDBOXES_PROXY: proxyUrl,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    input: 'y\n',
+    stdout: 'pipe',
+    stderr: 'pipe',
     reject: false,
     timeout: 120_000, // 2 minute timeout for sandbox creation
   });
