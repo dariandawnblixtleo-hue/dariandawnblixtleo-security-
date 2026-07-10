@@ -588,7 +588,22 @@ jobs:
           echo "::endgroup::"
       - name: Authenticate Docker sbx
         run: |
+          # Start the daemon in the background (sbx daemon start is a foreground process)
+          nohup sbx daemon start > /tmp/sbx-daemon.log 2>&1 &
+          disown
+          # Wait for daemon socket to appear
+          for i in $(seq 1 10); do
+            if sbx daemon status 2>/dev/null | grep -q "running"; then
+              echo "✅ sbx daemon is running"
+              break
+            fi
+            echo "Waiting for sbx daemon... (attempt $i)"
+            sleep 1
+          done
+          # Authenticate — stores credentials via the running daemon
           echo "${{ secrets.DOCKER_PAT }}" | sbx login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          # Verify auth persists
+          sbx auth status
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
