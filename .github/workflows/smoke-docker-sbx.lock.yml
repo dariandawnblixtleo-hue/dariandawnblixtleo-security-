@@ -626,7 +626,10 @@ jobs:
           sbx diagnose 2>&1 || true
           # Test sbx create directly (outside AWF) to isolate auth vs env issue
           echo "=== test sbx create (pre-agent) ==="
-          yes | sbx --debug create --name test-pre-agent shell /tmp 2>&1 || echo "sbx create test FAILED (exit $?)"
+          echo "=== sbx policy --help ==="
+          sbx policy --help 2>&1 || true
+          echo "=== attempting create with workspace dir ==="
+          yes | sbx --debug create --name test-pre-agent shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx create test FAILED (exit $?)"
           # Cleanup test sandbox if it was created
           sbx stop test-pre-agent 2>/dev/null || true
           sbx rm --force test-pre-agent 2>/dev/null || true
