@@ -589,8 +589,6 @@ jobs:
       - name: Authenticate Docker sbx
         run: |
           echo "${{ secrets.DOCKER_PAT }}" | sbx login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-        env:
-          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)

@@ -28,6 +28,21 @@ import { logger } from './logger';
 /** Name prefix for AWF-managed sandboxes. */
 const SBX_NAME_PREFIX = 'awf-agent';
 
+/**
+ * Env vars that must NEVER reach the sbx CLI or sandbox interior.
+ * Patterns are matched case-insensitively against env var names.
+ */
+const SECRET_ENV_PATTERNS = [
+  /TOKEN/i,
+  /SECRET/i,
+  /PASSWORD/i,
+  /KEY/i,
+  /CREDENTIAL/i,
+  /PAT$/i,
+  /^DOCKER_PAT$/i,
+  /^DOCKER_USERNAME$/i,
+];
+
 /** Default sandbox name (single-sandbox-per-run model). */
 export const SBX_DEFAULT_NAME = `${SBX_NAME_PREFIX}-${process.pid}`;
 
@@ -42,6 +57,23 @@ export interface SbxConfig {
   squidPort?: number;
   /** Additional workspace mounts (read-only paths). */
   extraMounts?: string[];
+}
+
+/**
+ * Strips secret-bearing env vars from process.env so they never reach
+ * the sbx CLI or the sandbox interior.  Returns a shallow copy with
+ * only non-secret entries plus any explicit overrides.
+ */
+export function sanitizeEnvForSbx(
+  overrides: Record<string, string> = {},
+): Record<string, string | undefined> {
+  const clean: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!SECRET_ENV_PATTERNS.some((p) => p.test(key))) {
+      clean[key] = value;
+    }
+  }
+  return { ...clean, ...overrides };
 }
 
 /**
@@ -70,10 +102,7 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   }
 
   await execa('sbx', args, {
-    env: {
-      ...process.env,
-      DOCKER_SANDBOXES_PROXY: proxyUrl,
-    },
+    env: sanitizeEnvForSbx({ DOCKER_SANDBOXES_PROXY: proxyUrl }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -96,6 +125,7 @@ export async function execInSandbox(
 
   try {
     const result = await execa('sbx', args, {
+      env: sanitizeEnvForSbx(),
       stdio: ['ignore', 'inherit', 'inherit'],
       reject: false,
       timeout: timeoutMinutes ? timeoutMinutes * 60 * 1000 : undefined,
