@@ -33,6 +33,7 @@ jest.mock('../dind-bootstrap');
 jest.mock('./preflight');
 jest.mock('./signal-handler');
 jest.mock('./validate-options');
+jest.mock('../sbx-manager');
 
 import { logger } from '../logger';
 import * as dockerManager from '../docker-manager';
@@ -45,6 +46,7 @@ import * as dindBootstrap from '../dind-bootstrap';
 import * as preflight from './preflight';
 import * as signalHandler from './signal-handler';
 import * as validateOptions from './validate-options';
+import * as sbxManager from '../sbx-manager';
 
 const mockedLogger = logger as jest.Mocked<typeof logger>;
 const mockedDockerManager = dockerManager as jest.Mocked<typeof dockerManager>;
@@ -57,6 +59,7 @@ const mockedDindBootstrap = dindBootstrap as jest.Mocked<typeof dindBootstrap>;
 const mockedPreflight = preflight as jest.Mocked<typeof preflight>;
 const mockedSignalHandler = signalHandler as jest.Mocked<typeof signalHandler>;
 const mockedValidateOptions = validateOptions as jest.Mocked<typeof validateOptions>;
+const mockedSbxManager = sbxManager as jest.Mocked<typeof sbxManager>;
 
 /** Minimal WrapperConfig returned by the validateOptions mock. */
 const STUB_CONFIG = {
@@ -108,6 +111,10 @@ describe('createMainAction', () => {
     mockedDindBootstrap.runDindBootstrap.mockResolvedValue(undefined);
     mockedSignalHandler.registerSignalHandlers.mockImplementation(() => {});
     mockedCliWorkflow.runMainWorkflow.mockResolvedValue(0);
+    mockedSbxManager.isSbxAvailable.mockResolvedValue(true);
+    mockedSbxManager.createSandbox.mockResolvedValue('awf-agent-test');
+    mockedSbxManager.execInSandbox.mockResolvedValue({ exitCode: 0 });
+    mockedSbxManager.removeSandbox.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -291,6 +298,45 @@ describe('createMainAction', () => {
       const action = createMainAction(getOptionValueSource);
       await action(['curl https://example.com'], {});
       expect(processExitSpy).toHaveBeenCalledWith(42);
+    });
+
+    describe('sbx runtime wiring', () => {
+      it('passes configured mounts/workdir/environment into sbx create/exec', async () => {
+        const sbxConfig = {
+          ...STUB_CONFIG,
+          containerRuntime: 'sbx',
+          containerWorkDir: '/home/runner/work/repo/repo',
+          volumeMounts: ['/tmp/tooling:/tmp/tooling:ro'],
+          enableApiProxy: true,
+          tty: true,
+        } as unknown as import('../types').WrapperConfig;
+        mockedValidateOptions.validateOptions.mockReturnValue(sbxConfig);
+        mockedCliWorkflow.runMainWorkflow.mockImplementation(async (_config, deps, _callbacks) => {
+          await deps.startContainers('/tmp/awf-test', ['github.com']);
+          const result = await deps.runAgentCommand('/tmp/awf-test', ['github.com'], undefined, 10);
+          return result.exitCode;
+        });
+
+        const action = createMainAction(getOptionValueSource);
+        await action(['echo hi'], {});
+
+        expect(mockedSbxManager.createSandbox).toHaveBeenCalledWith(expect.objectContaining({
+          extraMounts: ['/tmp/tooling:/tmp/tooling:ro'],
+        }));
+        expect(mockedSbxManager.execInSandbox).toHaveBeenCalledWith(
+          'awf-agent-test',
+          'echo hi',
+          expect.objectContaining({
+            timeoutMinutes: 10,
+            workDir: '/home/runner/work/repo/repo',
+            tty: true,
+            environment: expect.objectContaining({
+              HTTPS_PROXY: expect.any(String),
+              SQUID_PROXY_HOST: expect.any(String),
+            }),
+          }),
+        );
+      });
     });
   });
 

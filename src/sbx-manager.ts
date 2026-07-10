@@ -59,6 +59,13 @@ export interface SbxConfig {
   extraMounts?: string[];
 }
 
+export interface SbxExecOptions {
+  timeoutMinutes?: number;
+  workDir?: string;
+  environment?: Record<string, string>;
+  tty?: boolean;
+}
+
 /**
  * Strips secret-bearing env vars from process.env so they never reach
  * the sbx CLI or the sandbox interior.  Returns a shallow copy with
@@ -85,19 +92,22 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   const squidPort = config.squidPort || 3128;
   const proxyUrl = `http://${config.squidIp}:${squidPort}`;
 
+  logger.info(`Configuring sbx daemon proxy to ${proxyUrl}`);
+  await restartSbxDaemonWithProxy(proxyUrl);
+
   logger.info(`Creating sbx sandbox "${name}" with proxy → ${proxyUrl}`);
 
   const args = [
     'create',
     '--name', name,
-    'bash',  // minimal template — we exec our own command
+    'shell',  // shell agent provides a generic sandbox
     config.workspaceDir,
   ];
 
-  // Add extra read-only mounts
+  // Add extra mounts passed from AWF config (preserve caller-provided mode)
   if (config.extraMounts) {
     for (const mount of config.extraMounts) {
-      args.push(`${mount}:ro`);
+      args.push(mount);
     }
   }
 
@@ -117,18 +127,31 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
 export async function execInSandbox(
   name: string,
   command: string,
-  timeoutMinutes?: number,
+  options?: SbxExecOptions,
 ): Promise<{ exitCode: number }> {
   logger.info(`Executing in sandbox "${name}": ${command}`);
 
-  const args = ['exec', name, '--', 'bash', '-c', command];
+  const args = ['exec'];
+  if (options?.workDir) {
+    args.push('--workdir', options.workDir);
+  }
+  if (options?.tty) {
+    args.push('--tty');
+  }
+  if (options?.environment) {
+    for (const [key, value] of Object.entries(options.environment)) {
+      args.push('--env', `${key}=${value}`);
+    }
+  }
+
+  args.push(name, 'bash', '-lc', command);
 
   try {
     const result = await execa('sbx', args, {
       env: sanitizeEnvForSbx(),
       stdio: ['ignore', 'inherit', 'inherit'],
       reject: false,
-      timeout: timeoutMinutes ? timeoutMinutes * 60 * 1000 : undefined,
+      timeout: options?.timeoutMinutes ? options.timeoutMinutes * 60 * 1000 : undefined,
     });
 
     const exitCode = result.exitCode ?? 1;
@@ -142,7 +165,7 @@ export async function execInSandbox(
     return { exitCode };
   } catch (error: any) {
     if (error.timedOut) {
-      logger.error(`Sandbox command timed out after ${timeoutMinutes} minutes`);
+      logger.error(`Sandbox command timed out after ${options?.timeoutMinutes} minutes`);
       return { exitCode: 124 }; // match timeout convention
     }
     logger.error(`Sandbox exec failed: ${error.message}`);
@@ -157,23 +180,33 @@ export async function removeSandbox(name: string): Promise<void> {
   logger.info(`Removing sandbox "${name}"...`);
 
   try {
-    await execa('sbx', ['stop', name], {
+    const stopResult = await execa('sbx', ['stop', name], {
       stdio: ['ignore', 'pipe', 'pipe'],
       reject: false,
     });
+    if ((stopResult.exitCode ?? 1) !== 0) {
+      const stderr = stopResult.stderr?.trim();
+      logger.warn(
+        `Failed to stop sandbox "${name}" (exit ${(stopResult.exitCode ?? 1)}${stderr ? `: ${stderr}` : ''})`
+      );
+    }
   } catch {
     // stop may fail if already stopped — that's fine
   }
 
-  try {
-    await execa('sbx', ['rm', '--force', name], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      reject: false,
-    });
-    logger.info(`Sandbox "${name}" removed`);
-  } catch (error: any) {
-    logger.warn(`Failed to remove sandbox "${name}": ${error.message}`);
+  const rmResult = await execa('sbx', ['rm', '--force', name], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+  });
+  if ((rmResult.exitCode ?? 1) !== 0) {
+    const stderr = rmResult.stderr?.trim();
+    logger.warn(
+      `Failed to remove sandbox "${name}" (exit ${(rmResult.exitCode ?? 1)}${stderr ? `: ${stderr}` : ''})`
+    );
+    return;
   }
+
+  logger.info(`Sandbox "${name}" removed`);
 }
 
 /**
@@ -185,5 +218,58 @@ export async function isSbxAvailable(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function restartSbxDaemonWithProxy(proxyUrl: string): Promise<void> {
+  const daemonStatus = await execa('sbx', ['daemon', 'status', '--json'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+  });
+
+  const daemonRunning = daemonStatus.exitCode === 0;
+  if (daemonRunning) {
+    const stop = await execa('sbx', ['daemon', 'stop'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      reject: false,
+    });
+    if ((stop.exitCode ?? 1) !== 0) {
+      throw new Error(
+        `Unable to stop running sbx daemon (exit ${(stop.exitCode ?? 1)}): ${stop.stderr || stop.stdout || 'unknown error'}`
+      );
+    }
+  }
+
+  const start = await execa('sbx', ['daemon', 'start'], {
+    env: {
+      ...process.env,
+      DOCKER_SANDBOXES_PROXY: proxyUrl,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+  });
+  if ((start.exitCode ?? 1) !== 0) {
+    throw new Error(
+      `Unable to start sbx daemon with DOCKER_SANDBOXES_PROXY (exit ${(start.exitCode ?? 1)}): ${start.stderr || start.stdout || 'unknown error'}`
+    );
+  }
+
+  const verify = await execa('sbx', ['daemon', 'status', '--json'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+  });
+  if ((verify.exitCode ?? 1) !== 0) {
+    throw new Error(
+      `Unable to verify sbx daemon status after proxy configuration (exit ${(verify.exitCode ?? 1)}): ${verify.stderr || verify.stdout || 'unknown error'}`
+    );
+  }
+
+  // Best-effort validation from status JSON/text; fail closed if status clearly
+  // reports a different upstream proxy.
+  const statusText = `${verify.stdout || ''}\n${verify.stderr || ''}`;
+  if (statusText.includes('DOCKER_SANDBOXES_PROXY') && !statusText.includes(proxyUrl)) {
+    throw new Error(
+      `sbx daemon status does not reflect expected DOCKER_SANDBOXES_PROXY (${proxyUrl})`
+    );
   }
 }

@@ -321,6 +321,23 @@ describe('generateDockerCompose', () => {
       });
     });
 
+    describe('microVM runtime (sbx)', () => {
+      it('omits compose agent and agent-only helper services', () => {
+        const config = {
+          ...mockConfig,
+          containerRuntime: 'sbx',
+          runnerTopology: 'arc-dind' as const,
+          networkIsolation: false,
+        };
+        const result = generateDockerCompose(config, mockNetworkConfig);
+
+        expect(result.services.agent).toBeUndefined();
+        expect(result.services['iptables-init']).toBeUndefined();
+        expect(result.services['sysroot-stage']).toBeUndefined();
+        expect(result.volumes?.sysroot).toBeUndefined();
+      });
+    });
+
     describe('host-gateway IP passthrough (AWF_HOST_GATEWAY_IP)', () => {
       afterEach(() => {
         mockResolveDockerHostGateway.mockReset();
@@ -558,4 +575,3 @@ describe('generateDockerCompose', () => {
       });
     });
 });
-

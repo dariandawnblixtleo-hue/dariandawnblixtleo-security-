@@ -123,6 +123,7 @@ export function generateDockerCompose(
     agentService,
     agentVolumes,
     environment,
+    includeComposeAgent: includeAgent,
     config,
     networkConfig,
     imageConfig,

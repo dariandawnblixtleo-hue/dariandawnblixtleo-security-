@@ -14,6 +14,7 @@ interface AssembleOptionalServicesParams {
   agentService: any;
   agentVolumes: string[];
   environment: Record<string, string>;
+  includeComposeAgent?: boolean;
   config: WrapperConfig;
   networkConfig: NetworkConfig;
   imageConfig: ImageBuildConfig;
@@ -246,16 +247,21 @@ export function assembleOptionalServices(
   const { agentVolumes, environment, config, networkConfig, imageConfig } = params;
 
   const networkIsolation = !!config.networkIsolation;
+  const includeComposeAgent = params.includeComposeAgent !== false;
   const sysrootActive = isSysrootEnabled(config);
 
   presetSidecarIpEnvVars(environment, config, networkConfig);
-  assembleSysrootService(params, imageConfig.registry, imageConfig.parsedTag, sysrootActive);
-  assembleIptablesInitService(params, networkIsolation);
+  if (includeComposeAgent) {
+    assembleSysrootService(params, imageConfig.registry, imageConfig.parsedTag, sysrootActive);
+    assembleIptablesInitService(params, networkIsolation);
+  }
   assembleApiProxyService(params);
   assembleDohProxyService(params);
   assembleCliProxyService(params);
 
-  const namedVolumes = finalizeSysrootVolumes(agentVolumes, sysrootActive);
+  const namedVolumes = includeComposeAgent
+    ? finalizeSysrootVolumes(agentVolumes, sysrootActive)
+    : undefined;
   return { namedVolumes };
 }
 

@@ -29,6 +29,9 @@ import { runDindBootstrap } from '../dind-bootstrap';
 import { runtimeUsesComposeAgent } from '../container-runtime';
 import { createSandbox, execInSandbox, removeSandbox, isSbxAvailable, SBX_DEFAULT_NAME } from '../sbx-manager';
 import type { WrapperConfig } from '../types';
+import { buildAgentEnvironment } from '../services/agent-service';
+import { DEFAULT_DNS_SERVERS } from '../dns-resolver';
+import { AGENT_IP, API_PROXY_IP, CLI_PROXY_IP, DOH_PROXY_IP, SQUID_IP } from '../host-iptables-shared';
 
 const SENSITIVE_CONFIG_KEYS = new Set([
   'openaiApiKey',
@@ -246,6 +249,7 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
     // to launch the agent in a sandbox instead of Docker Compose.
     const useSbx = !runtimeUsesComposeAgent(config.containerRuntime);
     let sbxName: string | undefined;
+    let sbxEnvironment: Record<string, string> | undefined;
 
     const sbxStartContainers = useSbx
       ? async (workDir: string, allowedDomains: string[], proxyLogsDir?: string, skipPull?: boolean, onNetworkReady?: () => Promise<void>) => {
@@ -257,19 +261,39 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
             throw new Error('Docker sbx CLI not found. Install sbx to use --container-runtime sbx.');
           }
 
-          // Create the sandbox with workspace mounted, proxy chaining through Squid
+          sbxEnvironment = buildAgentEnvironment({
+            config,
+            networkConfig: {
+              subnet: '172.30.0.0/24',
+              squidIp: SQUID_IP,
+              agentIp: AGENT_IP,
+              proxyIp: config.enableApiProxy ? API_PROXY_IP : undefined,
+              dohProxyIp: config.dnsOverHttps ? DOH_PROXY_IP : undefined,
+              cliProxyIp: config.difcProxyHost ? CLI_PROXY_IP : undefined,
+            },
+            dnsServers: config.dnsServers || DEFAULT_DNS_SERVERS,
+          });
+
+          // Create the sandbox with configured mounts, proxy chaining through Squid
           const workspaceDir = process.env.GITHUB_WORKSPACE || process.cwd();
           sbxName = await createSandbox({
             workspaceDir,
-            squidIp: '172.30.0.10',
+            squidIp: SQUID_IP,
+            extraMounts: config.volumeMounts,
           });
+
         }
       : startContainers;
 
     const sbxRunAgentCommand = useSbx
       ? async (_workDir: string, _allowedDomains: string[], _proxyLogsDir?: string, agentTimeoutMinutes?: number) => {
           if (!sbxName) throw new Error('Sandbox not created');
-          const result = await execInSandbox(sbxName, config.agentCommand, agentTimeoutMinutes);
+          const result = await execInSandbox(sbxName, config.agentCommand, {
+            timeoutMinutes: agentTimeoutMinutes,
+            workDir: config.containerWorkDir,
+            environment: sbxEnvironment,
+            tty: config.tty,
+          });
           return { exitCode: result.exitCode, blockedDomains: [] as string[] };
         }
       : runAgentCommand;
