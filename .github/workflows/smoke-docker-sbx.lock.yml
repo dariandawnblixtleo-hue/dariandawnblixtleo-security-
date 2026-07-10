@@ -602,11 +602,17 @@ jobs:
           done
           # Authenticate — stores credentials via the running daemon
           echo "${{ secrets.DOCKER_PAT }}" | sbx login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          # Docker Hub registry login — sbx create pulls template images from Docker Hub
+          # and needs registry credentials in Docker's credential store
+          echo "${{ secrets.DOCKER_PAT }}" | docker login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
           # Initialize global network policy — AWF Squid handles domain filtering,
           # so sbx policy is allow-all (Squid is the enforcement layer)
           sbx policy init allow-all
           # Verify auth works (sbx ls requires auth)
           sbx ls
+          # Dump create help for reference (remove after debugging)
+          echo "=== sbx create --help ==="
+          sbx create --help 2>&1 || true
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
