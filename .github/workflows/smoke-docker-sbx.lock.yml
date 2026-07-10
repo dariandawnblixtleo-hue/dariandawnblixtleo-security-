@@ -587,6 +587,9 @@ jobs:
           fi
           echo "::endgroup::"
       - name: Authenticate Docker sbx
+        env:
+          DOCKER_PAT_VAL: ${{ secrets.DOCKER_PAT }}
+          DOCKER_USERNAME_VAL: ${{ secrets.DOCKER_USERNAME }}
         run: |
           # Start the daemon in the background (sbx daemon start is a foreground process)
           nohup sbx daemon start > /tmp/sbx-daemon.log 2>&1 &
@@ -600,11 +603,19 @@ jobs:
             echo "Waiting for sbx daemon... (attempt $i)"
             sleep 1
           done
-          # Authenticate — stores credentials via the running daemon
-          echo "${{ secrets.DOCKER_PAT }}" | sbx login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-          # Docker Hub registry login — sbx create pulls template images from Docker Hub
-          # and needs registry credentials in Docker's credential store
-          echo "${{ secrets.DOCKER_PAT }}" | docker login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          # Validate Docker Hub credentials before proceeding
+          echo "Validating Docker Hub credentials..."
+          echo "DOCKER_USERNAME length: ${#DOCKER_USERNAME_VAL}"
+          echo "DOCKER_PAT length: ${#DOCKER_PAT_VAL}"
+          if [ -z "$DOCKER_USERNAME_VAL" ] || [ -z "$DOCKER_PAT_VAL" ]; then
+            echo "❌ ERROR: DOCKER_USERNAME or DOCKER_PAT is empty!"
+            exit 1
+          fi
+          # Test Docker Hub login first (validates credentials)
+          echo "$DOCKER_PAT_VAL" | docker login --username "$DOCKER_USERNAME_VAL" --password-stdin
+          echo "✅ Docker Hub login succeeded"
+          # Now authenticate sbx service
+          echo "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
           # Initialize global network policy — AWF Squid handles domain filtering,
           # so sbx policy is allow-all (Squid is the enforcement layer)
           sbx policy init allow-all
