@@ -602,15 +602,8 @@ jobs:
           done
           # Authenticate — stores credentials via the running daemon
           echo "${{ secrets.DOCKER_PAT }}" | sbx login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-          # Initialize network policy (required before first sandbox create)
-          sbx policy set --global --egress allow-all 2>/dev/null || \
-            sbx policy init --global 2>/dev/null || \
-            sbx policy set --egress allow-all 2>/dev/null || \
-            echo "⚠️ Could not initialize sbx policy, trying sbx setup..."
-          # Fallback: run setup if policy commands don't work
-          sbx setup 2>/dev/null || true
-          # Show policy state for debugging
-          sbx policy ls 2>/dev/null || sbx policy 2>/dev/null || true
+          # Initialize global network policy (required before first sandbox create)
+          sbx policy init
           # Verify auth works (sbx ls requires auth)
           sbx ls
       - name: Determine automatic lockdown mode for GitHub MCP Server
