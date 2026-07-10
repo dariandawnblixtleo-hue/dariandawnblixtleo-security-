@@ -575,7 +575,7 @@ jobs:
           # Add Docker apt repo (REPO_ONLY=1 skips installing Docker Engine)
           curl -fsSL https://get.docker.com | sudo REPO_ONLY=1 sh
           sudo apt-get install -y docker-sbx
-          sbx --version
+          sbx version
           echo "::endgroup::"
 
           echo "::group::Verify KVM availability"

@@ -151,7 +151,7 @@ export async function removeSandbox(name: string): Promise<void> {
  */
 export async function isSbxAvailable(): Promise<boolean> {
   try {
-    await execa('sbx', ['--version'], { stdio: 'pipe' });
+    await execa('sbx', ['version'], { stdio: 'pipe' });
     return true;
   } catch {
     return false;
