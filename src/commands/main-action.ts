@@ -282,18 +282,45 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
             extraMounts: config.volumeMounts,
           });
 
+          // Diagnostics: verify sandbox connectivity before running agent
+          logger.info('[sbx-diag] Running sandbox connectivity diagnostics...');
+          const diagCmd = [
+            'echo "=== sbx diagnostics ==="',
+            'echo "hostname: $(hostname)"',
+            'echo "whoami: $(whoami)"',
+            'echo "pwd: $(pwd)"',
+            'echo "env (non-secret):" && env | grep -viE "token|secret|password|key|credential|pat" | sort',
+            'echo "=== network ==="',
+            'ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "no ip/ifconfig"',
+            'echo "=== dns ==="',
+            'cat /etc/resolv.conf 2>/dev/null || echo "no resolv.conf"',
+            'echo "=== proxy connectivity ==="',
+            `curl -sS --proxy http://${SQUID_IP}:3128 -o /dev/null -w "curl via proxy: %{http_code} (%{time_total}s)\\n" https://api.github.com/ 2>&1 || echo "curl via proxy FAILED: $?"`,
+            `curl -sS -o /dev/null -w "curl direct: %{http_code} (%{time_total}s)\\n" https://api.github.com/ 2>&1 || echo "curl direct FAILED: $?"`,
+            'echo "=== sbx diagnostics complete ==="',
+          ].join(' && ');
+
+          const diagResult = await execInSandbox(sbxName, diagCmd, {
+            timeoutMinutes: 2,
+            workDir: config.containerWorkDir,
+            environment: sbxEnvironment,
+          });
+          logger.info(`[sbx-diag] Diagnostics exited with code ${diagResult.exitCode}`);
         }
       : startContainers;
 
     const sbxRunAgentCommand = useSbx
       ? async (_workDir: string, _allowedDomains: string[], _proxyLogsDir?: string, agentTimeoutMinutes?: number) => {
           if (!sbxName) throw new Error('Sandbox not created');
+          logger.info(`[sbx] Launching agent command in sandbox "${sbxName}" (timeout: ${agentTimeoutMinutes ?? 'none'} min)`);
+          logger.debug(`[sbx] Agent command: ${config.agentCommand.substring(0, 200)}...`);
           const result = await execInSandbox(sbxName, config.agentCommand, {
             timeoutMinutes: agentTimeoutMinutes,
             workDir: config.containerWorkDir,
             environment: sbxEnvironment,
             tty: config.tty,
           });
+          logger.info(`[sbx] Agent command exited with code ${result.exitCode}`);
           return { exitCode: result.exitCode, blockedDomains: [] as string[] };
         }
       : runAgentCommand;
