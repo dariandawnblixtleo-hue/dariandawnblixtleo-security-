@@ -591,10 +591,11 @@ jobs:
           DOCKER_PAT_VAL: ${{ secrets.DOCKER_PAT }}
           DOCKER_USERNAME_VAL: ${{ secrets.DOCKER_USERNAME }}
         run: |
-          # Start the daemon in the background (sbx daemon start is a foreground process)
+          set -uxo pipefail  # no -e: collect all diagnostics even if some fail
+
+          # ── 1. Start daemon and authenticate ──
           nohup sbx daemon start > /tmp/sbx-daemon.log 2>&1 &
           disown
-          # Wait for daemon socket to appear
           for i in $(seq 1 10); do
             if sbx daemon status 2>/dev/null | grep -q "running"; then
               echo "✅ sbx daemon is running"
@@ -603,45 +604,76 @@ jobs:
             echo "Waiting for sbx daemon... (attempt $i)"
             sleep 1
           done
-          # Validate Docker Hub credentials before proceeding
-          echo "Validating Docker Hub credentials..."
-          echo "DOCKER_USERNAME length: ${#DOCKER_USERNAME_VAL}"
-          echo "DOCKER_PAT length: ${#DOCKER_PAT_VAL}"
-          if [ -z "$DOCKER_USERNAME_VAL" ] || [ -z "$DOCKER_PAT_VAL" ]; then
-            echo "❌ ERROR: DOCKER_USERNAME or DOCKER_PAT is empty!"
-            exit 1
-          fi
-          # Test Docker Hub registry login (validates creds for image pulls)
           printf '%s' "$DOCKER_PAT_VAL" | docker login --username "$DOCKER_USERNAME_VAL" --password-stdin
           echo "✅ Docker Hub login succeeded"
-          # Authenticate sbx service (printf avoids trailing newline from echo)
           printf '%s' "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
+
+          # ── 2. SBX version and initial policy state ──
+          echo "=== SBX version ==="
+          sbx version
+          echo "=== Existing policies ==="
+          sbx policy ls --wide || true
+          sbx policy ls --type filesystem --wide || true
+          sbx policy ls --include-inactive --wide || true
+
+          # ── 3. Reset local policy and re-initialize ──
+          echo "=== Reset local policy ==="
+          sbx daemon stop || true
+          sbx policy reset --force || true
           sbx policy init allow-all
+          # Restart daemon in background (sbx daemon start is foreground)
+          nohup sbx daemon start > /tmp/sbx-daemon.log 2>&1 &
+          disown
+          for i in $(seq 1 10); do
+            if sbx daemon status 2>/dev/null | grep -q "running"; then
+              echo "✅ sbx daemon restarted"
+              break
+            fi
+            echo "Waiting for sbx daemon... (attempt $i)"
+            sleep 1
+          done
+          # Re-authenticate after daemon restart
+          printf '%s' "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
+
+          # ── 4. Resulting filesystem policies ──
+          echo "=== Resulting policies ==="
+          sbx policy ls --wide || true
+          sbx policy ls --type filesystem --wide || true
+          sbx policy ls --include-inactive --wide || true
+
+          # ── 5. Verify workspace path ──
+          echo "=== Workspace ==="
+          printf 'GITHUB_WORKSPACE=%s\n' "$GITHUB_WORKSPACE"
+          realpath "$GITHUB_WORKSPACE"
+          ls -ld "$GITHUB_WORKSPACE"
+
+          # Pre-pull template image
           docker pull docker/sandbox-templates:shell-docker
-          sbx ls
-          # Explore mount policy configuration
-          echo "=== sbx setup --help ==="
-          sbx setup --help 2>&1 || true
-          echo "=== sbx --help (full) ==="
-          sbx --help 2>&1 || true
-          echo "=== daemon config ==="
-          ls -la ~/.local/state/sandboxes/ 2>&1 || true
-          find ~/.local/state/sandboxes/ -name "*.json" -o -name "*.toml" -o -name "*.yaml" -o -name "*.yml" -o -name "*.conf" 2>/dev/null | head -20
-          echo "=== policy store files ==="
-          find ~/.local/state/sandboxes/ -path "*/polic*" -o -path "*/rule*" -o -path "*/mount*" 2>/dev/null | head -20
-          echo "=== daemon log (last 50 lines) ==="
-          tail -50 ~/.local/state/sandboxes/sandboxes/sandboxd/daemon.log 2>&1 || true
-          # Try sbx create with cwd (.) instead of absolute path
-          echo "=== test sbx create with . ==="
-          cd "${GITHUB_WORKSPACE}" && yes | sbx create --name test-dot shell . 2>&1 || echo "sbx create with . FAILED (exit $?)"
-          sbx stop test-dot 2>/dev/null || true
-          sbx rm --force test-dot 2>/dev/null || true
-          # Try sbx run (one-step) in case it handles mount policy differently
-          echo "=== test sbx run ==="
-          timeout 30 sbx run --name test-run shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx run FAILED (exit $?)"
-          sbx stop test-run 2>/dev/null || true
-          sbx rm --force test-run 2>/dev/null || true
-          echo "=== EARLY EXIT: sbx create debugging ==="
+
+          # ── 6. Test clone-based sandbox ──
+          echo "=== Test clone-based sandbox ==="
+          yes | sbx create shell \
+            --name test-sandbox \
+            --clone \
+            "$GITHUB_WORKSPACE" \
+            --debug 2>&1 || echo "sbx create --clone FAILED (exit $?)"
+          sbx stop test-sandbox 2>/dev/null || true
+          sbx rm --force test-sandbox 2>/dev/null || true
+
+          # ── 7. Test direct mount sandbox ──
+          echo "=== Test direct mount sandbox ==="
+          yes | sbx create shell \
+            --name test-sandbox-direct \
+            "$GITHUB_WORKSPACE" \
+            --debug 2>&1 || echo "sbx create direct FAILED (exit $?)"
+          sbx stop test-sandbox-direct 2>/dev/null || true
+          sbx rm --force test-sandbox-direct 2>/dev/null || true
+
+          # ── 8. Daemon log for policy evaluation details ──
+          echo "=== Daemon log (last 100 lines) ==="
+          tail -100 ~/.local/state/sandboxes/sandboxes/sandboxd/daemon.log 2>&1 || true
+
+          echo "=== EARLY EXIT: sbx mount policy debugging ==="
           exit 1
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
