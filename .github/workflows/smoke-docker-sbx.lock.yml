@@ -635,6 +635,9 @@ jobs:
           yes | sbx --debug create --name test-direct shell "${GITHUB_WORKSPACE}" 2>&1 || echo "sbx create direct FAILED (exit $?)"
           sbx stop test-direct 2>/dev/null || true
           sbx rm --force test-direct 2>/dev/null || true
+          # EARLY EXIT: stop here until sbx create works
+          echo "=== EARLY EXIT: sbx create debugging ==="
+          exit 1
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
