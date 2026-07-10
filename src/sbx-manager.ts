@@ -111,8 +111,14 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
     }
   }
 
+  // sbx create is a host-side management operation that needs Docker auth
+  // credentials (stored on disk by `sbx login`).  Only sbx exec (which runs
+  // inside the sandbox) gets the sanitized env.
   await execa('sbx', args, {
-    env: sanitizeEnvForSbx({ DOCKER_SANDBOXES_PROXY: proxyUrl }),
+    env: {
+      ...process.env,
+      DOCKER_SANDBOXES_PROXY: proxyUrl,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
