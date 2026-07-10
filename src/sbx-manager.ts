@@ -95,7 +95,8 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   logger.info(`[sbx] Creating sandbox "${name}" with DOCKER_SANDBOXES_PROXY=${proxyUrl}`);
 
   // Verify daemon is running and authenticated before attempting create
-  const authCheck = await execa('sbx', ['auth', 'status'], {
+  // (sbx has no 'auth status' command; 'sbx ls' requires auth so we use it as a probe)
+  const authCheck = await execa('sbx', ['ls'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
     timeout: 10_000,
@@ -108,10 +109,10 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
     });
     logger.error(`[sbx] Not authenticated. daemon status: ${(daemonCheck.stdout || '').trim()}`);
     throw new Error(
-      `sbx is not authenticated (sbx auth status exit=${authCheck.exitCode}). ` +
+      `sbx is not authenticated (sbx ls exit=${authCheck.exitCode}). ` +
       `Ensure 'sbx login' was called with a running daemon. ` +
       `Daemon: ${(daemonCheck.stdout || '').trim()}. ` +
-      `Auth error: ${(authCheck.stderr || '').trim()}`
+      `Error: ${(authCheck.stderr || '').trim()}`
     );
   }
   logger.info('[sbx] Auth verified ✓');
