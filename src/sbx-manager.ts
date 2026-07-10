@@ -94,6 +94,30 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
 
   logger.info(`[sbx] Creating sandbox "${name}" with DOCKER_SANDBOXES_PROXY=${proxyUrl}`);
 
+  // Diagnostic: check auth and daemon state before create
+  const authCheck = await execa('sbx', ['auth', 'status'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+    timeout: 10_000,
+  });
+  logger.info(`[sbx] auth status: exit=${authCheck.exitCode}, stdout=${(authCheck.stdout || '').substring(0, 300)}, stderr=${(authCheck.stderr || '').substring(0, 300)}`);
+
+  const daemonCheck = await execa('sbx', ['daemon', 'status'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+    timeout: 10_000,
+  });
+  logger.info(`[sbx] daemon status: exit=${daemonCheck.exitCode}, stdout=${(daemonCheck.stdout || '').substring(0, 300)}`);
+
+  // Check where auth files live
+  const homeDir = process.env.HOME || '/home/runner';
+  const findAuth = await execa('find', [homeDir, '-path', '*sandbox*', '-o', '-path', '*sbx*', '-o', '-name', 'config.json', '-path', '*docker*'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+    timeout: 5_000,
+  });
+  logger.info(`[sbx] auth files: ${(findAuth.stdout || '').substring(0, 500)}`);
+
   const args = [
     'create',
     '--name', name,
