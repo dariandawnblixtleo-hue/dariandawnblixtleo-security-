@@ -117,6 +117,25 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   }
   logger.info('[sbx] Auth verified ✓');
 
+  // Debug: dump credential state to diagnose "secret not found" errors
+  logger.info(`[sbx] HOME=${process.env.HOME}`);
+  const credDir = `${process.env.HOME}/.local/state/sandboxes`;
+  try {
+    const lsResult = await execa('ls', ['-la', credDir], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
+    logger.info(`[sbx] credential dir: ${(lsResult.stdout || '').trim()}`);
+  } catch { /* ignore */ }
+  const dockerCfg = process.env.DOCKER_CONFIG || `${process.env.HOME}/.docker`;
+  try {
+    const dcResult = await execa('ls', ['-la', dockerCfg], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
+    logger.info(`[sbx] docker config dir: ${(dcResult.stdout || '').trim()}`);
+  } catch { /* ignore */ }
+  // Check if sbx daemon socket is accessible
+  const sockPath = `${credDir}/sandboxes/sandboxd/sandboxd.sock`;
+  try {
+    const sockResult = await execa('ls', ['-la', sockPath], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
+    logger.info(`[sbx] daemon socket: ${(sockResult.stdout || '').trim()}`);
+  } catch { /* ignore */ }
+
   const args = [
     'create',
     '--name', name,
@@ -148,10 +167,11 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   // the sbx CLI itself, routing its Docker Hub auth through Squid and breaking
   // credential lookup.  The proxy is configured inside the sandbox via sbx exec --env.
   // Use 'yes |' to auto-confirm interactive prompts (sbx checks isatty).
+  // Wrap in bash to handle broken pipe from 'yes' when sbx exits.
   // Pass --debug for detailed diagnostics during iteration.
   const debugArgs = ['--debug', ...args];
-  const shellCmd = `yes | sbx ${debugArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
-  logger.info(`[sbx] Running: ${shellCmd}`);
+  const shellCmd = `yes | sbx ${debugArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}; SBX_EXIT=$?; echo "SBX_EXIT_CODE=$SBX_EXIT"; exit $SBX_EXIT`;
+  logger.info(`[sbx] Running: yes | sbx ${debugArgs.join(' ')}`);
   const createResult = await execa('bash', ['-c', shellCmd], {
     env: {
       ...process.env,
@@ -163,18 +183,23 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
     timeout: 120_000, // 2 minute timeout for sandbox creation
   });
 
-  if ((createResult.exitCode ?? 1) !== 0) {
-    const stderr = (createResult.stderr || '').trim();
-    const stdout = (createResult.stdout || '').trim();
+  // 'yes |' causes broken pipe (exit 141) when sbx exits.
+  // Check if sbx actually succeeded by looking for the success message.
+  const stdout = (createResult.stdout || '').trim();
+  const stderr = (createResult.stderr || '').trim();
+  const sbxSucceeded = stdout.includes('Created sandbox') || stdout.includes('SBX_EXIT_CODE=0');
+  const exitCode = createResult.exitCode ?? 1;
+
+  if (exitCode !== 0 && !sbxSucceeded) {
     // Log full debug output for diagnostics
     if (stdout) logger.info(`[sbx] create stdout: ${stdout.substring(0, 2000)}`);
     if (stderr) logger.info(`[sbx] create stderr: ${stderr.substring(0, 2000)}`);
     throw new Error(
-      `sbx create failed (exit ${createResult.exitCode}): ${stderr || stdout || 'unknown error'}`
+      `sbx create failed (exit ${exitCode}): ${stderr || stdout || 'unknown error'}`
     );
   }
 
-  logger.info(`[sbx] Sandbox "${name}" created. stdout=${(createResult.stdout || '').substring(0, 200)}`);
+  logger.info(`[sbx] Sandbox "${name}" created (exit=${exitCode}, detected=${sbxSucceeded}). stdout=${stdout.substring(0, 200)}`);
   return name;
 }
 
