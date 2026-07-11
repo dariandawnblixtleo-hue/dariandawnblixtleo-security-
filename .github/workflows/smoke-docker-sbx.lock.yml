@@ -639,39 +639,32 @@ jobs:
           echo "=== Resulting policies ==="
           sbx policy ls --wide || true
           sbx policy ls --type filesystem --wide || true
-          sbx policy ls --include-inactive --wide || true
 
           # ── 5. Verify workspace path ──
           echo "=== Workspace ==="
           printf 'GITHUB_WORKSPACE=%s\n' "$GITHUB_WORKSPACE"
-          realpath "$GITHUB_WORKSPACE"
           ls -ld "$GITHUB_WORKSPACE"
+
+          # ── 5b. Fix KVM permissions ──
+          # sbx microVMs need /dev/kvm access. Runner user may not be in kvm group.
+          echo "=== KVM permissions ==="
+          ls -la /dev/kvm
+          sudo chmod 666 /dev/kvm
+          ls -la /dev/kvm
 
           # Pre-pull template image
           docker pull docker/sandbox-templates:shell-docker
 
-          # ── 6. Test clone-based sandbox ──
-          echo "=== Test clone-based sandbox ==="
-          yes | sbx create shell \
-            --name test-sandbox \
-            --clone \
-            "$GITHUB_WORKSPACE" \
-            --debug 2>&1 || echo "sbx create --clone FAILED (exit $?)"
-          sbx stop test-sandbox 2>/dev/null || true
-          sbx rm --force test-sandbox 2>/dev/null || true
-
-          # ── 7. Test direct mount sandbox ──
+          # ── 6. Test direct mount sandbox ──
           echo "=== Test direct mount sandbox ==="
           yes | sbx create shell \
             --name test-sandbox-direct \
             "$GITHUB_WORKSPACE" \
             --debug 2>&1 || echo "sbx create direct FAILED (exit $?)"
+          # Verify it's running
+          sbx ls
           sbx stop test-sandbox-direct 2>/dev/null || true
           sbx rm --force test-sandbox-direct 2>/dev/null || true
-
-          # ── 8. Daemon log for policy evaluation details ──
-          echo "=== Daemon log (last 100 lines) ==="
-          tail -100 ~/.local/state/sandboxes/sandboxes/sandboxd/daemon.log 2>&1 || true
 
           echo "=== EARLY EXIT: sbx mount policy debugging ==="
           exit 1
