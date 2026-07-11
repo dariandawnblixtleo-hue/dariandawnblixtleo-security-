@@ -118,22 +118,21 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   logger.info('[sbx] Auth verified ✓');
 
   // Debug: dump credential state to diagnose "secret not found" errors
-  logger.info(`[sbx] HOME=${process.env.HOME}, XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME || '(unset)'}`);
+  logger.info(`[sbx] HOME=${process.env.HOME}, XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME || '(unset)'}, XDG_DATA_HOME=${process.env.XDG_DATA_HOME || '(unset)'}`);
   const credDir = `${process.env.HOME}/.local/state/sandboxes`;
   try {
-    const lsResult = await execa('ls', ['-la', credDir], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
-    logger.info(`[sbx] credential dir: ${(lsResult.stdout || '').trim()}`);
+    const lsResult = await execa('find', [credDir, '-type', 'f'], { stdio: ['ignore', 'pipe', 'pipe'], reject: false, timeout: 5000 });
+    logger.info(`[sbx] state files: ${(lsResult.stdout || '(empty)').trim()}`);
+  } catch { /* ignore */ }
+  // Also check ~/.config for sbx config/secrets
+  try {
+    const cfgResult = await execa('bash', ['-c', `find ~/.config -path '*sandbox*' -o -path '*sbx*' -o -path '*docker*' 2>/dev/null | head -20`], { stdio: ['ignore', 'pipe', 'pipe'], reject: false, timeout: 5000 });
+    logger.info(`[sbx] config files: ${(cfgResult.stdout || '(empty)').trim()}`);
   } catch { /* ignore */ }
   const dockerCfg = process.env.DOCKER_CONFIG || `${process.env.HOME}/.docker`;
   try {
-    const dcResult = await execa('ls', ['-la', dockerCfg], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
-    logger.info(`[sbx] docker config dir: ${(dcResult.stdout || '').trim()}`);
-  } catch { /* ignore */ }
-  // Check if sbx daemon socket is accessible
-  const sockPath = `${credDir}/sandboxes/sandboxd/sandboxd.sock`;
-  try {
-    const sockResult = await execa('ls', ['-la', sockPath], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
-    logger.info(`[sbx] daemon socket: ${(sockResult.stdout || '').trim()}`);
+    const dcResult = await execa('find', [dockerCfg, '-type', 'f'], { stdio: ['ignore', 'pipe', 'pipe'], reject: false, timeout: 5000 });
+    logger.info(`[sbx] docker config files: ${(dcResult.stdout || '(empty)').trim()}`);
   } catch { /* ignore */ }
 
   const args = [
@@ -170,24 +169,14 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   // Wrap in bash to handle broken pipe from 'yes' when sbx exits.
   // Pass --debug for detailed diagnostics during iteration.
   const debugArgs = ['--debug', ...args];
-  const shellCmd = `yes | sbx ${debugArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}; SBX_EXIT=$?; echo "SBX_EXIT_CODE=$SBX_EXIT"; exit $SBX_EXIT`;
+  // Unset XDG_CONFIG_HOME inside bash (AWF step sets it to $HOME which breaks
+  // sbx credential lookup). Also unset DOCKER_SANDBOXES_PROXY.
+  const shellCmd = `unset XDG_CONFIG_HOME DOCKER_SANDBOXES_PROXY; yes | sbx ${debugArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}; SBX_EXIT=$?; echo "SBX_EXIT_CODE=$SBX_EXIT"; exit $SBX_EXIT`;
   logger.info(`[sbx] Running: yes | sbx ${debugArgs.join(' ')}`);
-
-  // Build clean env for sbx create:
-  // - Remove XDG_CONFIG_HOME if it's been overridden (e.g., AWF step sets it to $HOME
-  //   which breaks sbx credential lookup — sbx stores secrets at $XDG_CONFIG_HOME/sandboxes/)
-  // - Ensure DOCKER_CONFIG is set for Docker credential helpers
-  const sbxCreateEnv: Record<string, string | undefined> = { ...process.env };
-  // If XDG_CONFIG_HOME is set to HOME (a common AWF/Copilot pattern), unset it
-  // so sbx uses its default (~/.config).
-  if (sbxCreateEnv.XDG_CONFIG_HOME === sbxCreateEnv.HOME) {
-    logger.info(`[sbx] Removing XDG_CONFIG_HOME=${sbxCreateEnv.XDG_CONFIG_HOME} (conflicts with sbx credential store)`);
-    delete sbxCreateEnv.XDG_CONFIG_HOME;
-  }
-  sbxCreateEnv.DOCKER_CONFIG = process.env.DOCKER_CONFIG || `${process.env.HOME}/.docker`;
+  logger.info(`[sbx] XDG_CONFIG_HOME in process.env: ${process.env.XDG_CONFIG_HOME || '(unset)'}`);
 
   const createResult = await execa('bash', ['-c', shellCmd], {
-    env: sbxCreateEnv,
+    // Don't override env — let Node inherit naturally, bash unset handles conflicts
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
     timeout: 120_000, // 2 minute timeout for sandbox creation
