@@ -118,7 +118,7 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   logger.info('[sbx] Auth verified ✓');
 
   // Debug: dump credential state to diagnose "secret not found" errors
-  logger.info(`[sbx] HOME=${process.env.HOME}`);
+  logger.info(`[sbx] HOME=${process.env.HOME}, XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME || '(unset)'}`);
   const credDir = `${process.env.HOME}/.local/state/sandboxes`;
   try {
     const lsResult = await execa('ls', ['-la', credDir], { stdio: ['ignore', 'pipe', 'pipe'], reject: false });
@@ -172,12 +172,22 @@ export async function createSandbox(config: SbxConfig): Promise<string> {
   const debugArgs = ['--debug', ...args];
   const shellCmd = `yes | sbx ${debugArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}; SBX_EXIT=$?; echo "SBX_EXIT_CODE=$SBX_EXIT"; exit $SBX_EXIT`;
   logger.info(`[sbx] Running: yes | sbx ${debugArgs.join(' ')}`);
+
+  // Build clean env for sbx create:
+  // - Remove XDG_CONFIG_HOME if it's been overridden (e.g., AWF step sets it to $HOME
+  //   which breaks sbx credential lookup — sbx stores secrets at $XDG_CONFIG_HOME/sandboxes/)
+  // - Ensure DOCKER_CONFIG is set for Docker credential helpers
+  const sbxCreateEnv: Record<string, string | undefined> = { ...process.env };
+  // If XDG_CONFIG_HOME is set to HOME (a common AWF/Copilot pattern), unset it
+  // so sbx uses its default (~/.config).
+  if (sbxCreateEnv.XDG_CONFIG_HOME === sbxCreateEnv.HOME) {
+    logger.info(`[sbx] Removing XDG_CONFIG_HOME=${sbxCreateEnv.XDG_CONFIG_HOME} (conflicts with sbx credential store)`);
+    delete sbxCreateEnv.XDG_CONFIG_HOME;
+  }
+  sbxCreateEnv.DOCKER_CONFIG = process.env.DOCKER_CONFIG || `${process.env.HOME}/.docker`;
+
   const createResult = await execa('bash', ['-c', shellCmd], {
-    env: {
-      ...process.env,
-      // Ensure sbx/Docker can find Docker Hub credentials
-      DOCKER_CONFIG: process.env.DOCKER_CONFIG || `${process.env.HOME}/.docker`,
-    },
+    env: sbxCreateEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     reject: false,
     timeout: 120_000, // 2 minute timeout for sandbox creation
