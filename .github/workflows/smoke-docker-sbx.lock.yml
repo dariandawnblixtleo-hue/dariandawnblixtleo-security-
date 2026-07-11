@@ -581,6 +581,13 @@ jobs:
           echo "::group::Verify KVM availability"
           if lsmod | grep -q kvm; then
             echo "✅ KVM is available"
+            # Ensure runner user can access /dev/kvm (may not be in kvm group)
+            if [ -w /dev/kvm ]; then
+              echo "✅ /dev/kvm is writable"
+            else
+              echo "Fixing /dev/kvm permissions..."
+              sudo chmod 666 /dev/kvm
+            fi
           else
             echo "⚠️ KVM not available — sbx will not start"
             kvm-ok 2>&1 || true
@@ -645,29 +652,23 @@ jobs:
           printf 'GITHUB_WORKSPACE=%s\n' "$GITHUB_WORKSPACE"
           ls -ld "$GITHUB_WORKSPACE"
 
-          # ── 5b. Fix KVM permissions ──
-          # sbx microVMs need /dev/kvm access. Runner user may not be in kvm group.
+          # ── 5b. Verify KVM permissions ──
           echo "=== KVM permissions ==="
-          ls -la /dev/kvm
-          sudo chmod 666 /dev/kvm
           ls -la /dev/kvm
 
           # Pre-pull template image
           docker pull docker/sandbox-templates:shell-docker
 
-          # ── 6. Test direct mount sandbox ──
+          # ── 6. Verify sbx create works ──
           echo "=== Test direct mount sandbox ==="
-          yes | sbx create shell \
-            --name test-sandbox-direct \
-            "$GITHUB_WORKSPACE" \
-            --debug 2>&1 || echo "sbx create direct FAILED (exit $?)"
+          # sbx create succeeds but yes| causes broken pipe exit 1 — use bash -c to isolate
+          bash -c 'yes | sbx create shell --name test-sandbox-direct "$GITHUB_WORKSPACE" --debug 2>&1' || true
           # Verify it's running
           sbx ls
+          sbx exec test-sandbox-direct uname -a || echo "sbx exec failed"
           sbx stop test-sandbox-direct 2>/dev/null || true
           sbx rm --force test-sandbox-direct 2>/dev/null || true
-
-          echo "=== EARLY EXIT: sbx mount policy debugging ==="
-          exit 1
+          echo "✅ sbx auth step complete"
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
