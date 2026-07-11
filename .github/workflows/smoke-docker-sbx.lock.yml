@@ -958,6 +958,15 @@ jobs:
         id: pre_agent_audit
         continue-on-error: true
         run: bash "${RUNNER_TEMP}/gh-aw/actions/audit_pre_agent_workspace.sh"
+      - name: Refresh sbx credentials
+        env:
+          DOCKER_PAT_VAL: ${{ secrets.DOCKER_PAT }}
+          DOCKER_USERNAME_VAL: ${{ secrets.DOCKER_USERNAME }}
+        run: |
+          # Re-authenticate sbx immediately before AWF runs.
+          # Docker Hub OAuth tokens from sbx login can expire between steps.
+          printf '%s' "$DOCKER_PAT_VAL" | sbx login --username "$DOCKER_USERNAME_VAL" --password-stdin
+          echo "✅ sbx credentials refreshed"
       - name: Execute GitHub Copilot CLI
         id: agentic_execution
         # Copilot CLI tool arguments (sorted):
