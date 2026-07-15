@@ -1,7 +1,7 @@
 {
   "title": "Model-to-API Endpoint Mapping",
   "description": "Maps AI model families to their supported API endpoints. Used to determine which endpoint (chat/completions vs responses vs messages) a model requires.",
-  "lastUpdated": "2026-07-09T06:32:34Z",
+  "lastUpdated": "2026-07-11T06:00:54Z",
   "sources": {
     "openai": "https://platform.openai.com/docs/models",
     "anthropic": "https://docs.anthropic.com/en/docs/about-claude/models"
@@ -20,6 +20,12 @@
       },
       "models": [
         {
+          "family": "gpt-5.6",
+          "patterns": ["gpt-5.6*"],
+          "endpoints": ["chat_completions", "responses"],
+          "notes": "Supports both endpoints. Includes gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna per OpenAI SDK ChatModel."
+        },
+        {
           "family": "gpt-5.5",
           "patterns": ["gpt-5.5*"],
           "endpoints": ["responses"],
@@ -29,7 +35,7 @@
           "family": "gpt-5.4",
           "patterns": ["gpt-5.4*"],
           "endpoints": ["chat_completions", "responses"],
-          "notes": "Supports both endpoints. Includes gpt-5.4-mini, gpt-5.4-nano."
+          "notes": "Supports both endpoints on OpenAI. Includes gpt-5.4-mini, gpt-5.4-nano. NOTE: gpt-5.4-mini is not accessible via /chat/completions on the Copilot API (responses-only via Copilot); the api-proxy handles this by falling back to the next alias candidate."
         },
         {
           "family": "gpt-5.3",

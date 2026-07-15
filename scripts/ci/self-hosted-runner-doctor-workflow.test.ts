@@ -30,7 +30,7 @@ describe('self-hosted runner doctor workflow config', () => {
     expect(lock).toContain('pull-requests: read');
     expect(lock).toContain('🩺 Runner Doctor');
     expect(lock).toContain('shared/self-hosted-failure-modes.md');
-    expect(lock).toContain('github/gh-aw-actions/setup@bf7ba42ce6443bf79fa184c9c6a35de202690bfc');
+    expect(lock).toMatch(/github\/gh-aw\/actions\/setup@[a-f0-9]{40}/);
   });
 
   it('keeps the shared catalog, workflow playbook, and portable agent aligned for new failure modes', () => {
@@ -50,6 +50,20 @@ describe('self-hosted runner doctor workflow config', () => {
       expect(content).toContain('| `unknown shorthand flag: \'d\' in -d` from `docker compose up -d` on ARC/DinD | A14 |');
       expect(content).toContain('| `Rootless artifact permission repair failed for .../sandbox/firewall/logs` on ARC/DinD | A15 |');
       expect(content).not.toMatch(/^- A15 \/ /m);
+      // D1 gVisor support phrasing
+      expect(content).toContain('**gVisor support landed** in PR github/gh-aw-firewall#6093');
+      expect(content).toContain('use `--container-runtime gvisor` (maps to Docker runtime `runsc`)');
+      expect(content).toContain('Raw `runsc` remains an unknown passthrough runtime');
+      expect(content).toContain('**Kata Containers** remain an unresolved research area.');
+      expect(content).toContain('github/gh-aw-firewall#3264, github/gh-aw-firewall#6093');
+      expect(content).toContain('- D1 / #3264 — Kata Containers compatibility research (gVisor resolved in github/gh-aw-firewall#6093)');
+      expect(content).not.toContain('- D1 / #3264 — gVisor and Kata compatibility research');
+      // B11 new failure mode
+      expect(content).toContain('| B11 |');
+      expect(content).toContain('github/gh-aw-firewall#6070, github/gh-aw-firewall#6072');
+      expect(content).toContain('**Improved in AWF (PR github/gh-aw-firewall#6072, merged 2026-07-10)**');
+      expect(content).toContain('The non-zero exit code comes from `runAgentCommand()` before cleanup; cleanup warnings do not override it.');
+      expect(content).toContain('| `[WARN] Rootless artifact permission repair failed ... (exit 1)` with little/no stderr detail, plus cleanup warnings around chroot-home removal and `Command completed with exit code: 1` | B11 |');
     }
 
     expect(source).toContain('- `unknown shorthand flag: \'d\' in -d` from `docker compose up -d` → A14 (DinD sidecar missing `docker-compose-plugin`)');

@@ -40,6 +40,10 @@ safe-outputs:
     run-failure: "🦎 [{workflow_name}]({run_url}) reports {status}. gVisor compatibility issue detected."
 timeout-minutes: 15
 sandbox:
+  agent:
+    id: awf
+    runtime: gvisor
+    sudo: true
   mcp:
     version: v0.3.32
 strict: false
@@ -74,35 +78,6 @@ jobs:
       - name: Token-usage sanity check
         run: node scripts/ci/check-token-usage.js --artifact-root /tmp/gh-aw-agent --engine copilot
 steps:
-  - name: Install and configure gVisor runtime
-    run: |
-      set -euo pipefail
-      echo "::group::Install gVisor (runsc)"
-      ARCH=$(uname -m)
-      URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
-      echo "Downloading runsc for ${ARCH}..."
-      curl -fsSL "${URL}/runsc" -o /tmp/runsc
-      curl -fsSL "${URL}/containerd-shim-runsc-v1" -o /tmp/containerd-shim-runsc-v1
-      sudo install -m 755 /tmp/runsc /usr/local/bin/runsc
-      sudo install -m 755 /tmp/containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
-      runsc --version
-      echo "::endgroup::"
-
-      echo "::group::Register runsc as Docker runtime"
-      sudo runsc install
-      # Must use restart (not reload): Docker's SIGHUP reload does NOT call
-      # setHostGatewayIP(), so --add-host host.docker.internal:host-gateway
-      # breaks for any container started after a reload-only config change.
-      sudo systemctl restart docker
-      echo "Docker runtimes:"
-      docker info --format '{{.Runtimes}}' || docker info | grep -i runtime
-      echo "::endgroup::"
-
-      echo "::group::Verify gVisor works"
-      docker run --rm --runtime=runsc hello-world
-      echo "✅ gVisor runtime verified"
-      echo "::endgroup::"
-
   - name: Smoke test data
     id: smoke-data
     run: |

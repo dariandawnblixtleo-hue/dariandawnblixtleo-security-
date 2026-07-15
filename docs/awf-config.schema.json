@@ -493,6 +493,16 @@
       "description": "Security and isolation configuration.",
       "additionalProperties": false,
       "properties": {
+        "legacySecurity": {
+          "type": "boolean",
+          "description": "Enable legacy security mode (sudo, host-access, iptables). When omitted or false, strict security is enforced (network-isolation + API proxy credential injection)."
+        },
+        "securityMode": {
+          "type": "string",
+          "enum": ["strict", "compat"],
+          "description": "[DEPRECATED] Use legacySecurity instead. Will be removed in a future release.",
+          "deprecated": true
+        },
         "sslBump": {
           "type": "boolean",
           "description": "Enable SSL bumping (TLS interception) in the Squid proxy. Requires a custom CA certificate."
@@ -622,8 +632,8 @@
         },
         "containerRuntime": {
           "type": "string",
-          "enum": ["gvisor"],
-          "description": "Container runtime for the agent container. Set to \"gvisor\" to run the agent under gVisor's runsc runtime for additional sandboxing. Only the agent container uses the custom runtime; infrastructure containers (squid-proxy, api-proxy) always use the default runc runtime. When set, AWF automatically injects extra_hosts entries for compose-internal services to work around DNS resolution issues with non-default runtimes. Requires gVisor (runsc) to be installed and registered with Docker on the host."
+          "enum": ["gvisor", "sbx"],
+          "description": "Container runtime for the agent container. \"gvisor\" runs the agent under gVisor's runsc runtime (OCI runtime, compose-based). \"sbx\" runs the agent inside a Docker sbx microVM with hypervisor isolation; infrastructure containers (squid-proxy, api-proxy) stay in Docker Compose on the host and the sbx proxy chains upstream through AWF's Squid for domain filtering. Only the agent uses the custom runtime; infrastructure containers always use the default runc runtime."
         }
       }
     },

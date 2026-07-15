@@ -81,6 +81,7 @@ Prefer the narrowest match. Examples:
 - `FATAL: http_port: IPv6 is not available` → B3
 - `No CA certificates were loaded from the system` in chroot on RHEL/Fedora/Amazon Linux → B9 (missing /etc/pki/ mount)
 - `[WARN] Rootless artifact permission repair failed` with each attempt taking ~30 s (registry timeout, not instant) → B10 (compound tag@digest ref causes Docker to attempt GHCR manifest verification even under `--pull never`)
+- `[WARN] Rootless artifact permission repair failed ... (exit 1)` with no stderr detail, followed by `Command completed with exit code: 1` despite apparent agent success → B11 (repair container stderr not captured; chroot-home removal failure escalated to fatal exit)
 - `none of the git remotes correspond to the GH_HOST environment variable` → C4
 - `400 bad request: Authorization header is badly formatted` → C3
 - `400 bad request: Authorization header is badly formatted` on `*.ghe.com` with `COPILOT_API_TARGET=api.business.githubcopilot.com` → C8 (platform-type guard short-circuits token-prefix catalog)
@@ -89,7 +90,7 @@ Prefer the narrowest match. Examples:
 
 ### 4. Check for known gaps and notable fixes
 
-If the best match is one of the known open gaps (gVisor/Kata runtime support, `--enable-dind` cleanup, enterprise header-injection extension points, or the remaining `GH_HOST` leak to user steps), say so explicitly instead of implying there is a shipped fix.
+If the best match is one of the known open gaps (Kata Containers runtime support, `--enable-dind` cleanup, enterprise header-injection extension points, or the remaining `GH_HOST` leak to user steps), say so explicitly instead of implying there is a shipped fix.
 
 A13 / github/gh-aw-firewall#5693, github/gh-aw-firewall#5696 — ARC/DinD split-fs base-userland staging is **fixed in AWF v0.27.15**: set `runner.topology: "arc-dind"` in the AWF config JSON. The `sysroot-stage` init container copies the signed `build-tools` image filesystem into a `sysroot` volume mounted at `/host:ro` before the agent starts.
 
@@ -102,6 +103,8 @@ B8 / github/gh-aw-firewall#5983 — Pre-flight EACCES on persistent runners from
 B9 / github/gh-aw-firewall#5783 — RHEL/Amazon Linux CA bundle not accessible in chroot is **fixed** in AWF version including github/gh-aw-firewall#5783. Workaround: copy `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` to a chroot-visible path and set `SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`/`GIT_SSL_CAINFO`.
 
 B10 / github/gh-aw-firewall#6025 — `fixArtifactPermissionsForRootless()` compound `tag@digest` ref timeout is **fixed** in AWF version including github/gh-aw-firewall#6025. `resolvePermFixerImageRef()` now returns tag-only refs, eliminating registry I/O during `--pull never` repair.
+
+B11 / github/gh-aw-firewall#6072 — Repair container stderr not captured and chroot-home removal failure escalated to exit 1 is **fixed in AWF (PR github/gh-aw-firewall#6072, merged 2026-07-10)**. Stderr is now included in the `[WARN]` message; chroot-home removal failure is downgraded to `debug`.
 
 C7 / #5615 — DIFC proxy enterprise-host awareness for `*.ghe.com` data-residency is not yet implemented in the companion projects; AWF ≥ v0.27.12 provides improved diagnostics (HTTP status + targeted hint) but the underlying cause remains unresolved.
 
@@ -184,6 +187,7 @@ Establish these facts before matching a failure mode:
 | B8 | `EACCES: permission denied, mkdir '/tmp/gh-aw/sandbox/firewall/logs'` (or any `/tmp/gh-aw/...` path) — failure occurs **before any container starts**, at `writeConfigs` time, on a **persistent self-hosted runner** | A previous AWF run or the Docker daemon left `/tmp/gh-aw/sandbox/firewall/` (or a parent) owned by **root**. With `--network-isolation` now the default, AWF runs without `sudo`, so `mkdirSync` on the root-owned parent fails with EACCES. | **Fixed in AWF (PR github/gh-aw-firewall#5983)**: added `preflight-reclaim.ts` — on non-root invocation, walks upward from the target path to find the first non-writable ancestor and removes it via `sudo rm -rf` with `fs.rmSync` fallback; protected paths (`/`, `/tmp`, `/home/runner`) are never touched. Workaround (older AWF): `sudo rm -rf /tmp/gh-aw/sandbox` before re-running. | `ls -la /tmp/gh-aw/sandbox/firewall/` — dirs owned by root (uid 0) confirm the mode; `docker info | grep -i rootless` | github/gh-aw-firewall#5983 |
 | B9 | `No CA certificates were loaded from the system` — Copilot CLI or other HTTPS tools fail inside AWF chroot on RHEL, Fedora, or Amazon Linux runners; all HTTPS traffic returns TLS verification errors | AWF chroot mounts only Debian/Ubuntu CA paths (`/etc/ssl:ro`, `/etc/ca-certificates:ro`). On RHEL/Amazon Linux the system CA bundle lives under `/etc/pki/ca-trust/` which is not mounted. | **Fixed in AWF (PR github/gh-aw-firewall#5783)**: `copy_system_ca_bundle()` in agent entrypoint detects the CA bundle from 5 candidate paths (Debian, RHEL, Fedora, macOS, Alpine), copies it to `/tmp/awf-lib/system-ca-certificates.crt` if not directly accessible, and sets `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`. Workaround: copy `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` to a chroot-visible path and set those env vars. | `ls /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` — present on RHEL/Amazon Linux confirms the mode | github/gh-aw-firewall#5733, github/gh-aw-firewall#5783 |
 | B10 | `[WARN] Rootless artifact permission repair failed for .../sandbox/firewall/logs (exit 1)` × 3 directories, each taking exactly ~30 s; total ~90 s wasted; cascading `EACCES: permission denied` / `Failed to remove chroot home directory after permission repair` | `fixArtifactPermissionsForRootless()` builds compound `tag@digest` image refs (e.g. `agent:0.27.22@sha256:55f065...`) for its `docker run --pull never` repair container. Despite `--pull never`, Docker still attempts registry manifest verification for compound refs; when GHCR credentials are unavailable (cleaned in an earlier workflow step or expired) the verification TCP-connects and times out (~30 s per directory). | **Fixed in AWF (PR github/gh-aw-firewall#6025)**: `resolvePermFixerImageRef()` now strips the `@sha256:...` digest and uses a tag-only ref. `--pull never` with a tag-only ref skips all registry I/O. Upgrade to AWF version that includes github/gh-aw-firewall#6025. Workaround (older AWF): ensure GHCR credentials are available until after the AWF cleanup step. | `[WARN] Rootless artifact permission repair failed` messages each followed by exactly ~30 s delay in the workflow log; `docker pull --dry-run agent:...@sha256:...` times out while `docker inspect agent:...` succeeds | github/gh-aw-firewall#6025 |
+| B11 | AWF exits with code 1 and logs show `[WARN] Rootless artifact permission repair failed ... (exit 1)` plus cleanup warnings, but no actionable stderr detail from the repair container | `fixArtifactPermissionsForRootless()` previously discarded repair-container stderr, so the warning hid the real failure context. The non-zero exit code comes from `runAgentCommand()` before cleanup; cleanup warnings do not override it. | **Improved in AWF (PR github/gh-aw-firewall#6072, merged 2026-07-10)**: stderr from the repair container is now captured in the warning, and chroot-home cleanup noise is reduced by downgrading that log from `warn` to `debug`. Treat this mode as diagnostic-opacity around a pre-existing non-zero command exit, not cleanup-driven exit-code mutation. | Compare agent-command logs with `Command completed with exit code: <n>`; on affected versions, repair warnings lack stderr context. On AWF including github/gh-aw-firewall#6072, the warning includes stderr detail for root-cause triage. | github/gh-aw-firewall#6070, github/gh-aw-firewall#6072 |
 
 ## Category C — GHES / GHEC / `ghe.com`
 
@@ -202,10 +206,11 @@ Establish these facts before matching a failure mode:
 
 | ID | Signal | Root cause | Status | Probe | Citations |
 |---|---|---|---|---|---|
-| D1 | AWF does not start or isolation is ineffective under gVisor / Kata | These runtimes do not support AWF's expected netns / capability model | Known unresolved research area | `docker info | grep -i runtime`; inspect NAT rules in `awf-iptables-init` | #3264 |
+| D1 | AWF does not start or isolation is ineffective under gVisor / Kata | Alternative runtimes can differ from AWF's default runtime assumptions | **gVisor support landed** in PR github/gh-aw-firewall#6093 (merged 2026-07-10): use `--container-runtime gvisor` (maps to Docker runtime `runsc`) and AWF enables static-DNS host mappings for that runtime. Raw `runsc` remains an unknown passthrough runtime (no gVisor-specific capability profile lookup). **Kata Containers** remain an unresolved research area. | `docker info | grep -i runtime`; run AWF with `--container-runtime gvisor` (not raw `runsc`) on a build including github/gh-aw-firewall#6093 | github/gh-aw-firewall#3264, github/gh-aw-firewall#6093 |
 | D2 | cli-proxy fails on IPv6-enabled runners | The tunnel was bound only to `127.0.0.1` | Fixed by dual-stack binding | Check `ss -tlnp` inside `awf-cli-proxy` | #4626 |
 | D3 | `--enable-dind` still exists after DinD removal | Legacy flag cleanup is incomplete | Known unresolved cleanup item | `awf --help | grep enable-dind` | #1727 |
 | D4 | Enterprise LLM gateway needs an injected auth header | API proxy lacks a user extension point for that hop | Known unresolved proposal | No general probe; capture the required header flow in the report | #4849 |
+| D5 | gVisor install step exits with `HTTP 404` / download failure; `runsc` binary not found; AWF exits with `runtime 'gvisor' is not available` or compose up fails immediately after `--container-runtime gvisor` | The `gh-aw`-compiler-generated gVisor install step (or smoke-test lock files) pins a specific gVisor release tag (e.g. `20250623.0`); if that artifact is no longer available from `storage.googleapis.com`, the download returns 404 | Manually update the affected generated `.lock.yml` install step to a currently available release (for example, `20250707.0`), or upgrade to a `gh-aw` release containing the corresponding `DefaultGVisorVersion` update and recompile. PR github/gh-aw-firewall#6143 only patched this repository's four smoke-test lock files; it did not add an AWF configuration option or release an AWF fix. | `ARCH=$(uname -m); curl -sI https://storage.googleapis.com/gvisor/releases/release/20250623.0/${ARCH}/runsc` — HTTP 404 confirms the pinned artifact is unavailable; replace the tag with an available release and retry | github/gh-aw-firewall#6143 |
 
 ## Error-string quick lookup
 
@@ -218,6 +223,7 @@ Establish these facts before matching a failure mode:
 | `unknown shorthand flag: 'd' in -d` from `docker compose up -d` on ARC/DinD | A14 |
 | `Rootless artifact permission repair failed for .../sandbox/firewall/logs` on ARC/DinD | A15 |
 | `[WARN] Rootless artifact permission repair failed` with each attempt taking ~30 s (timeout, not an instant error), followed by cascading `EACCES: permission denied` on chroot-home removal | B10 |
+| `[WARN] Rootless artifact permission repair failed ... (exit 1)` with little/no stderr detail, plus cleanup warnings around chroot-home removal and `Command completed with exit code: 1` | B11 |
 | `FATAL: http_port: IPv6 is not available` or `Bungled ... [::]:3128` | B3 |
 | `node: command not found` on self-hosted or DinD | A8 or B4 |
 | `none of the git remotes correspond to the GH_HOST environment variable` | C4 |
@@ -235,12 +241,13 @@ Establish these facts before matching a failure mode:
 | `getent passwd <UID>` fails or `HOME=/`, `USER=root` in chroot | A6 |
 | Bind-mounted `/tmp/...` files are missing inside DinD containers | A1 |
 | `diagnosis=unknown` from `awf-cli-proxy` DIFC probe (proxy reachable, no connection error) with `GITHUB_SERVER_URL=*.ghe.com`, or `diagnosis=reachable-but-api-error (HTTP NNN)` | C7 |
+| `HTTP 404` / `404 Not Found` downloading `runsc` from `storage.googleapis.com` during gVisor install | D5 |
 
 ## Known unresolved items
 
 Flag these explicitly instead of implying there is a complete fix:
 
-- D1 / #3264 — gVisor and Kata compatibility research
+- D1 / #3264 — Kata Containers compatibility research (gVisor resolved in github/gh-aw-firewall#6093)
 - D3 / #1727 — lingering `--enable-dind` cleanup
 - D4 / #4849 — enterprise header injection extension point
 - C5 / #3937 — full `GH_HOST` leak fix still requires gh-aw changes

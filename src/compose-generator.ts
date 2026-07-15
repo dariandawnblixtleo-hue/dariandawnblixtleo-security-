@@ -10,6 +10,8 @@ import { buildSquidService } from './services/squid-service';
 import { buildAgentEnvironment, buildAgentVolumes, buildAgentService } from './services/agent-service';
 import { assembleOptionalServices } from './services/optional-services';
 import { buildComposeNetworks } from './compose-network';
+import { runtimeUsesComposeAgent } from './container-runtime';
+import { API_PROXY_PORTS } from './types/ports';
 
 /**
  * Generates Docker Compose configuration
@@ -104,10 +106,15 @@ export function generateDockerCompose(
   });
 
   // ── Assemble base services ─────────────────────────────────────────────────
+  // For microVM backends (e.g. sbx), the agent is NOT a compose service —
+  // it's launched externally.  We still build the agent service object so that
+  // optional-services can wire depends_on edges for infra containers, but we
+  // omit it from the final compose output.
+  const includeAgent = runtimeUsesComposeAgent(config.containerRuntime);
 
   const services: Record<string, any> = {
     'squid-proxy': squidService,
-    'agent': agentService,
+    ...(includeAgent ? { 'agent': agentService } : {}),
   };
 
   // ── Insert optional sidecars and wire depends_on edges ────────────────────
@@ -117,6 +124,7 @@ export function generateDockerCompose(
     agentService,
     agentVolumes,
     environment,
+    includeComposeAgent: includeAgent,
     config,
     networkConfig,
     imageConfig,
@@ -124,6 +132,31 @@ export function generateDockerCompose(
     initSignalDir,
     effectiveHome,
   });
+
+  // ── Publish infra ports for microVM runtimes ───────────────────────────────
+  // When the agent runs in a microVM (e.g. sbx), it can't reach Docker-internal
+  // IPs (172.30.0.x).  Publish api-proxy ports to the host so the microVM can
+  // reach them via its gateway IP.  (Squid already has ports published.)
+  //
+  // In network-isolation mode the internal network blocks host→container traffic,
+  // so we also attach api-proxy to the external bridge (`awf-ext`) — same as
+  // Squid — so published ports are reachable from outside Docker.
+  if (!includeAgent && services['api-proxy']) {
+    const proxyService = services['api-proxy'];
+    if (!proxyService.ports) {
+      proxyService.ports = [];
+    }
+    for (const port of Object.values(API_PROXY_PORTS)) {
+      proxyService.ports.push(`${port}:${port}`);
+    }
+    // Attach to external network so port publishing works with internal awf-net
+    if (config.networkIsolation) {
+      proxyService.networks = {
+        ...(proxyService.networks || {}),
+        'awf-ext': {},
+      };
+    }
+  }
 
   // ── Assemble and return the compose result ─────────────────────────────────
 
