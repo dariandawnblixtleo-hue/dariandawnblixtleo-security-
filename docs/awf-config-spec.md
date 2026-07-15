@@ -104,7 +104,7 @@ AWF settings MAY be supplied via config files, including stdin (`--config -`).
 - `network.upstreamProxy` → `--upstream-proxy`
 - `network.isolation` → `--network-isolation` *(experimental; enforces egress via Docker network topology instead of host iptables)*
 - `network.topologyAttach[]` → `--topology-attach <name>` *(repeatable; requires `network.isolation: true`)*
-- `apiProxy.enabled` → `--enable-api-proxy`
+- `apiProxy.enabled` → `--enable-api-proxy` *([DEPRECATED] API proxy is always enabled; this flag is ignored)*
 - `apiProxy.enableTokenSteering` → `--enable-token-steering`
 - `apiProxy.anthropicAutoCache` → `--anthropic-auto-cache`
 - `apiProxy.anthropicCacheTailTtl` → `--anthropic-cache-tail-ttl <5m|1h>`
@@ -161,6 +161,8 @@ AWF settings MAY be supplied via config files, including stdin (`--config -`).
 - When both `apiProxy.targets.antigravity` and `apiProxy.targets.gemini` are set, `antigravity` takes precedence per field.
 - `apiProxy.targets.vertex.host` → `--vertex-api-target`
 - `apiProxy.targets.vertex.basePath` → `--vertex-api-base-path`
+- `security.legacySecurity` → `--legacy-security`
+- `security.securityMode` → `--security-mode <strict|compat>` *([DEPRECATED] Use `security.legacySecurity` instead)*
 - `security.sslBump` → `--ssl-bump`
 - `security.enableDlp` → `--enable-dlp`
 - `security.enableHostAccess` → `--enable-host-access`
@@ -407,39 +409,23 @@ When the API proxy sidecar is enabled, the following rules apply:
    specified parent span, enabling end-to-end distributed tracing from the
    GitHub Actions workflow through the api-proxy to the LLM provider.
 
-### 9.3 API Proxy Disabled (`apiProxy.enabled = false`)
+### 9.3 `apiProxy.enabled` Deprecated
 
-When the API proxy sidecar is disabled (the default):
+`apiProxy.enabled` is **deprecated and ignored**. The API proxy sidecar is always started; there is no disabled mode. Setting `apiProxy.enabled: false` in a config file is silently ignored for backward compatibility. The CLI flag `--enable-api-proxy` is similarly ignored; `--no-enable-api-proxy` is rejected at runtime with an error.
 
-1. Source credentials present in the host environment SHOULD be forwarded
-   directly to the agent container.
-2. No proxy-routing variables or placeholder values SHALL be injected.
+Credential isolation described in §9.2 therefore always applies: source credentials are never forwarded directly to the agent container.
 
-### 9.4 Credential Exclusion Requires API Proxy
+### 9.4 Credential Exclusion
 
 *This constraint is normative for tools generating AWF configurations.*
 
-A conforming configuration MUST NOT exclude a source credential (§9.1) via
-`environment.excludeEnv` unless `apiProxy.enabled` is `true`. Excluding a
-credential without enabling the API proxy leaves the agent with no key and
-no placeholder, causing authentication failures at runtime.
+Because the API proxy sidecar is always active, source credentials (§9.1) are always excluded from the agent environment and held in the sidecar. A conforming implementation MUST NOT rely on `environment.excludeEnv` to suppress API keys — the sidecar handles exclusion automatically.
 
-Tools that compile AWF configurations (e.g., `gh-aw`) MUST ensure that when
-an LLM agent requires an API key (OpenAI, Anthropic, Gemini, etc.), **one**
-of the following holds:
-
-1. `apiProxy.enabled = true` — the real key is held by the sidecar, and a
-   placeholder is injected for tool compatibility; or
-2. The key is forwarded directly to the agent container (non-proxy mode).
-
-Emitting `excludeEnv: ["OPENAI_API_KEY"]` without `apiProxy.enabled: true`
-is a configuration error. A conforming implementation MAY emit a warning
-when this condition is detected.
+Tools that compile AWF configurations (e.g., `gh-aw`) MUST ensure that when an LLM agent requires an API key (OpenAI, Anthropic, Gemini, etc.), the real key is held by the sidecar and a placeholder is injected for tool compatibility.
 
 ### 9.4 One-Shot Token Protection
 
-Real credentials forwarded to the agent — whether source credentials in
-non-proxy mode (§9.3) or GitHub tokens (`GITHUB_TOKEN`, `GH_TOKEN`) — MUST
+Real credentials forwarded to the agent — GitHub tokens (`GITHUB_TOKEN`, `GH_TOKEN`) and any non-LLM credentials — MUST
 be protected by the one-shot-token mechanism. Protected tokens are cached
 on first access and removed from `/proc/self/environ` to prevent
 environment variable inspection.
