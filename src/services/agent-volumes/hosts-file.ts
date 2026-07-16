@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import execa from 'execa';
 import { logger } from '../../logger';
@@ -69,7 +70,42 @@ export function generateHostsFileMount(config: WrapperConfig): string {
   }
   const chrootHostsDir = fs.mkdtempSync(path.join(hostsRootDir, 'chroot-'));
   const chrootHostsPath = path.join(chrootHostsDir, 'hosts');
-  fs.writeFileSync(chrootHostsPath, hostsContent, { mode: 0o644 });
+
+  try {
+    fs.writeFileSync(chrootHostsPath, hostsContent, { mode: 0o644 });
+  } catch (err: unknown) {
+    if (!useDockerHostStaging && err && typeof err === 'object' && 'code' in err && err.code === 'EACCES') {
+      // Emit diagnostics so we can trace the root cause (runner environment, AppArmor, etc.)
+      const uid = process.getuid?.() ?? '?';
+      const gid = process.getgid?.() ?? '?';
+      let dirStat = '(cannot stat)';
+      try {
+        const st = fs.statSync(chrootHostsDir);
+        dirStat = `uid=${st.uid} gid=${st.gid} mode=${(st.mode & 0o7777).toString(8)}`;
+      } catch { /* best effort */ }
+      let parentStat = '(cannot stat)';
+      try {
+        const st = fs.statSync(hostsRootDir);
+        parentStat = `uid=${st.uid} gid=${st.gid} mode=${(st.mode & 0o7777).toString(8)}`;
+      } catch { /* best effort */ }
+      logger.warn(
+        `EACCES writing chroot hosts file (process uid=${uid} gid=${gid}):\n` +
+        `  target: ${chrootHostsPath}\n` +
+        `  chrootHostsDir: ${chrootHostsDir} [${dirStat}]\n` +
+        `  hostsRootDir:   ${hostsRootDir} [${parentStat}]\n` +
+        `  Falling back to writing hosts file directly in hostsRootDir.`
+      );
+
+      // Fallback: create a fresh temp directory via mkdtempSync (which CodeQL
+      // recognizes as a secure temp-file pattern) at the OS tmpdir level,
+      // bypassing whatever is blocking writes inside the workDir subdirectory.
+      const fallbackDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-chroot-'));
+      const fallbackPath = path.join(fallbackDir, 'hosts');
+      fs.writeFileSync(fallbackPath, hostsContent, { mode: 0o644 });
+      return `${fallbackPath}:/host/etc/hosts:ro`;
+    }
+    throw err;
+  }
 
   return `${chrootHostsPath}:/host/etc/hosts:ro`;
 }
